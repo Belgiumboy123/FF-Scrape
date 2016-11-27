@@ -20,6 +20,8 @@ def LoadDraft():
 	html = open("draft/draft.html", "r").read()
 	soup = BeautifulSoup(html, 'html.parser')
 
+	# player -> [draft owner, auction value]
+	playerDraftMap = {}
 	
 	for team in soup.find_all('tr', class_='tableHead'):
 		
@@ -47,14 +49,17 @@ def LoadDraft():
 				rowData.append(playerDetails[0])
 				rowData.append(playerDetails[1])
 
-			rowData.append(data[2].text.strip()[1:])
+			amount = data[2].text.strip()[1:]
+			rowData.append(amount)
 
+			playerDraftMap[str(playerName)] = [str(owner), str(amount)]
 			rows.append(rowData)
-
 
 	with open("draft.csv", "w") as f:
 		writer = csv.writer(f)
 		writer.writerows(rows)
+
+	return playerDraftMap
 
 #
 # ScoreRowData
@@ -69,8 +74,10 @@ def LoadDraft():
 #    player - Opp
 #    Pts
 #    Fantasy Week
+#    Draft Owner
+#    Draft Amount
 
-def LoadStatsForPage(htmlFile, rows):
+def LoadStatsForPage(htmlFile, rows, playerDraftMap):
 
 	html = open(htmlFile, "r").read()
 	soup = BeautifulSoup(html, 'html.parser')
@@ -139,27 +146,37 @@ def LoadStatsForPage(htmlFile, rows):
 			rowData.append(row.find('td', class_='').text)
 			rowData.append(row.find('td', class_='playertableStat').text)
 
+			draftInfo = ["", ""]
+
+			try:
+				draftInfo = playerDraftMap[playerName]
+			except KeyError:
+				pass
+
+			rowData.append(draftInfo[0])
+			rowData.append(draftInfo[1])
+
 			rows.append(rowData)
 
 
-def LoadStats():
+def LoadStats(playerDraftMap):
 
 	rows = []
 
 	dirname = 'boxscores'
 	for item in os.listdir(dirname):
 		print(item)
-		LoadStatsForPage( dirname + '/'+item, rows)
+		LoadStatsForPage( dirname + '/'+item, rows, playerDraftMap)
 
-	with open("boxscoredata.csv", "w") as f:
+	with open("boxscoredatanew.csv", "w") as f:
 		writer = csv.writer(f)
 		writer.writerows(rows)		
  
 
 
 def main():
-	#LoadStats()
-	LoadDraft()  
+	playerDraftMap = LoadDraft()
+	LoadStats(playerDraftMap)
 	
                              
 if __name__ == '__main__':
