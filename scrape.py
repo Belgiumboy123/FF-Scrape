@@ -26,7 +26,15 @@ def LoadDraft():
 		for player in team.find_next_siblings('tr'):
 
 			rowData = []
-			rowData.append( team.a.text.strip() )
+			
+			#Need to grab the owner name because
+			#We have one too many 'Butt Stuffs' in our league
+			title = team.a['title']
+			idxStart = title.index('(')
+			idxEnd = title.index(')')
+			owner = title[idxStart+1:idxEnd]
+			rowData.append(owner)
+
 			data = player.find_all('td')
 			playerName = data[1].a.text.strip()
 			rowData.append(playerName)
@@ -150,8 +158,8 @@ def LoadStats():
 
 
 def main():
-	LoadStats()
-	#LoadDraft()  
+	#LoadStats()
+	LoadDraft()  
 	
                              
 if __name__ == '__main__':
