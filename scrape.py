@@ -93,7 +93,7 @@ def LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap
 		rowData.append(teamNames[(index+1)%2])
 
 		isDefense = False
-		isBench = True
+		isBench = False
 		slot = row.find('td', class_='playerSlot').text.strip()
 		if slot == 'RB/WR':
 			slot = 'FLEX'
