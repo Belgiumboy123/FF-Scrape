@@ -6,6 +6,21 @@ import sys
 import os
 import getopt
 
+
+PosInSlotMap = 	{ 
+					'QB' : ['QB'],
+					'RB' : ['RB'],
+					'WR' : ['WR'],
+					'TE' : ['TE'],
+					'DEF': ['Defense'],
+					'FLEX' : ['RB', 'WR'],
+					'EX-FLEX' : ['RB', 'WR', 'TE']
+				}
+
+
+def DoesPosFitInSlot(pos, slot):
+	return pos in PosInSlotMap[slot]
+
 '''
 Fantasy Team Name
 Player Name
@@ -62,23 +77,79 @@ def LoadDraft():
 
 	return playerDraftMap
 
+
+
+def RunWrongDecisionsAlgo(startingScoreRowData, benchScoreRowData, wrongDecisions):
+	
+	startingPlayers = startingScoreRowData[:]
+	
+	playersToInsert = benchScoreRowData[:]
+	startersRemovedFromLineup = []
+
+	while len(playersToInsert) > 0:
+
+		player = playersToInsert.pop(0)
+
+		if player[9] <= 0:
+			continue
+
+		newSlot = [-1,0]
+
+		for index,starter in enumerate(startingPlayers):
+			if not DoesPosFitInSlot(player[7], starter[4]):
+				continue
+
+			# Find the biggest point gain for our new player
+			pointDiff = player[9] - starter[9]
+			if pointDiff > newSlot[1]:
+				newSlot[0] = index
+				newSlot[1] = pointDiff
+
+		if newSlot[0] > -1:
+
+			# Try to reinsert the now benched player back
+			# into starting lineup. Maybe there is still hope
+			playerToRemove = startingPlayers[newSlot[0]]
+			playersToInsert.append(playerToRemove)
+
+			if not playerToRemove[12]:
+				startersRemovedFromLineup.append(startingPlayers[newSlot[0]])
+
+			# set player's slot and place into the starting lineup!
+			player[4] = playerToRemove[4]
+			startingPlayers[newSlot[0]] = player
+			
+	# get list of actual swaps and add to wrong decisions list
+	for removedStarter in startersRemovedFromLineup:
+		for starter in startingPlayers:
+			if starter[12] and DoesPosFitInSlot(removedStarter[7], starter[4]):
+				wrongDecision = []
+				wrongDecision.append(starter[1])
+				wrongDecision.append(starter[0])
+				wrongDecision.append(removedStarter[5])
+				wrongDecision.append(starter[5])
+				wrongDecision.append(starter[9] - removedStarter[9])
+				wrongDecisions.append(wrongDecision)
+
+	return startingPlayers
+
 #
 # Return list of players row data from the given playerTable
 #
 # ScoreRowData
-#    Week
-#    Owner name
-#    TeamName
-#    Fantasy Opp
-#    Slot
-#	 Player Name
-#    Team
-#    Pos
-#    player - Opp
-#    Pts
-#    Fantasy Week
-#    Draft Owner
-#    Draft Amount
+# 0   Week
+# 1   Owner name
+# 2   TeamName
+# 3   Fantasy Opp
+# 4   Slot
+# 5	  Player Name
+# 6   Team
+# 7   Pos
+# 8   player - Opp
+# 9   Pts
+# 10  Draft Owner
+# 11  Draft Amount
+# 12  is original bench
 def LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap):
 
 	scoreRowData = []
@@ -149,13 +220,14 @@ def LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap
 
 		rowData.append(draftInfo[0])
 		rowData.append(draftInfo[1])
+		rowData.append(isBench)
 
 		scoreRowData.append(rowData)
 
 	return scoreRowData
 
 
-def LoadStatsForPage(htmlFile, rows, playerDraftMap, standings):
+def LoadStatsForPage(htmlFile, rows, playerDraftMap, standings, loadWrongDecisions, wrongDecisions):
 
 	html = open(htmlFile, "r").read()
 	soup = BeautifulSoup(html, 'html.parser')
@@ -190,9 +262,15 @@ def LoadStatsForPage(htmlFile, rows, playerDraftMap, standings):
 
 		startingScoreRowData = LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap)
 
-		benchScoreRowData = LoadStatsForTeam(benches[index], index, week, owners, teamNames, playerDraftMap)
+		playersToCount = []
 
-		for player in startingScoreRowData:
+		if loadWrongDecisions:
+			benchScoreRowData = LoadStatsForTeam(benches[index], index, week, owners, teamNames, playerDraftMap)
+			playersToCount = RunWrongDecisionsAlgo(startingScoreRowData, benchScoreRowData, wrongDecisions)
+		else:
+			playersToCount = startingScoreRowData
+
+		for player in playersToCount:
 			totalWeekPoints[index] += player[9]
 
 		for row in startingScoreRowData:
@@ -218,15 +296,14 @@ def LoadStatsForPage(htmlFile, rows, playerDraftMap, standings):
 			ownerStandings[1] += 1
 
 
-def LoadStats(playerDraftMap, useTestDir):
+def LoadStats(playerDraftMap, useTestDir, loadWrongDecisions):
 
 	rows = []
 
 	# owner -> [wins, losses, totalpoints]
 	standings = {}
 
-	# list of wrong decisions
-	# Info here
+	# list of wrong decisions [owner, week, starter nane, bench name, points lost]
 	wrongDecisions = []
 
 	dirname = 'boxscores'
@@ -235,7 +312,7 @@ def LoadStats(playerDraftMap, useTestDir):
 
 	for item in os.listdir(dirname):
 		print(item)
-		LoadStatsForPage( dirname + '/'+item, rows, playerDraftMap, standings)
+		LoadStatsForPage(dirname + '/'+item, rows, playerDraftMap, standings, loadWrongDecisions, wrongDecisions)
 
 	with open("boxscoredatanew.csv", "w") as f:
 		writer = csv.writer(f)
@@ -258,25 +335,28 @@ def LoadStats(playerDraftMap, useTestDir):
 def main(argv):
 
 	try:
-		opts, args = getopt.getopt(argv,"td")
+		opts, args = getopt.getopt(argv,"tdw")
 	except getopt.GetoptError:
-		print("scrape.py -t [use test dir] -d [parse draft]")
+		print("scrape.py -t [use test dir] -d [parse draft] -w [wrong decisions]")
 		sys.exit(2)
 
 	loadDraft = False
 	useTestDir = False
+	loadWrongDecisions = False
 
 	for opt, arg in opts:
 		if opt == '-t':
 			useTestDir = True
 		elif opt == '-d':
 			loadDraft = True
+		elif opt == '-w':
+			loadWrongDecisions = True
 
 	playerDraftMap = {} 
 	if loadDraft:
 		playerDraftMap = LoadDraft()
 
-	LoadStats(playerDraftMap, useTestDir)
+	LoadStats(playerDraftMap, useTestDir, loadWrongDecisions)
 	
                              
 if __name__ == '__main__':
