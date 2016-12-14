@@ -183,7 +183,15 @@ def LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap
 
 		# Some terrible human forgot to start anyone at all
 		if playerInfo is None:
-			rows.append(rowData)
+			rowData.append("")
+			rowData.append("")
+			rowData.append("")
+			rowData.append("")
+			rowData.append(0.0)
+			rowData.append("")
+			rowData.append("")
+			rowData.append(False)
+			scoreRowData.append(rowData)
 			continue
 
 		playerName = playerInfo.a.text.strip()
@@ -331,6 +339,9 @@ def LoadStats(playerDraftMap, useTestDir, loadWrongDecisions):
  		w = csv.writer(f)
  		w.writerows(standingsList)
 
+ 	with open("wrongdecisions.csv", "w") as f:
+ 		w = csv.writer(f)
+ 		w.writerows(wrongDecisions)
 
 def main(argv):
 
