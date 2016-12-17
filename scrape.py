@@ -13,7 +13,7 @@ class Results:
 		self.standings = {}
 
 		# Standings if every owner set best starting lineup
-		self.optimalStandings = {}
+		self.standingsOptimal = {}
 		
 		# Player -> [owner who drafted player, draft cost]
 		self.playerDraftMap = {}
@@ -53,7 +53,7 @@ class Results:
 	 	self.outputRows("wrongDecisionsOptimal.csv", self.wrongDecisionsOptimal)
 	 	self.outputRows("playerData.csv", self.playerData)
 	 	self.outputStandings("standings.csv", self.standings)
-	 	self.outputStandings("standingsOptimal.csv", self.optimalStandings)
+	 	self.outputStandings("standingsOptimal.csv", self.standingsOptimal)
 
 
 PosInSlotMap = 	{ 
@@ -298,7 +298,26 @@ def LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap
 	return scoreRowData
 
 
-def LoadStatsForPage(htmlFile, loadWrongDecisions, results):
+def UpdateStandings(owners, standings, totalWeekPoints):
+	for index,owner in enumerate(owners):
+		ownerStandings = []
+		try:
+			ownerStandings = standings[owner]
+		except KeyError:
+			standings[owner] = [0,0,0]
+			ownerStandings = standings[owner]
+
+		ownerStandings[2] += totalWeekPoints[index]
+
+		oppOwnerIndex = (index+1) % 2
+
+		if( totalWeekPoints[index] > totalWeekPoints[oppOwnerIndex]):
+			ownerStandings[0] += 1
+		else:
+			ownerStandings[1] += 1
+
+
+def LoadStatsForPage(htmlFile, results):
 
 	html = open(htmlFile, "r").read()
 	soup = BeautifulSoup(html, 'html.parser')
@@ -331,48 +350,39 @@ def LoadStatsForPage(htmlFile, loadWrongDecisions, results):
 	# total week points for each owner in same order as owner names
 	# totalWeekPoints[0]  total week points for starting lineups
 	# totalWeekPoints[1]  total week pints for optimal lineups
-	totalWeekPoints = [0,0]
+	totalWeekPoints = [[0,0],[0,0]]
 
 	for index,playerTable in enumerate(players):
 
 		startingScoreRowData = LoadStatsForTeam(playerTable, index, week, owners, teamNames, results.playerDraftMap)
+		benchScoreRowData = LoadStatsForTeam(benches[index], index, week, owners, teamNames, results.playerDraftMap)
 
-		playersToCount = []
-
-		if loadWrongDecisions:
-			benchScoreRowData = LoadStatsForTeam(benches[index], index, week, owners, teamNames, results.playerDraftMap)
-			playersToCount = RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, results.wrongDecisionsOptimal)
-		else:
-			playersToCount = startingScoreRowData
-
-		for player in playersToCount:
-			totalWeekPoints[index] += player[9]
-
+		# Add all starting and bench players to player data
 		for row in startingScoreRowData:
 			results.playerData.append(row)
 
-	# update standings map from totalWeekPoints
-	for index,owner in enumerate(owners):
-		ownerStandings = []
-		try:
-			ownerStandings = results.standings[owner]
-		except KeyError:
-			results.standings[owner] = [0,0,0]
-			ownerStandings = results.standings[owner]
+		for row in benchScoreRowData:
+			results.playerData.append(benchScoreRowData)
 
-		ownerStandings[2] += totalWeekPoints[index]
+		# Get the optimal staring lineup
+		optimalScoringPlayers = RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, results.wrongDecisionsOptimal) 
 
-		oppOwnerIndex = (index+1) % 2
+		# Calculate total week points for both starting lineup
+		# and the optimal starting lineup
+		for player in startingScoreRowData:
+			totalWeekPoints[0][index] += player[9]
 
-		if( totalWeekPoints[index] > totalWeekPoints[oppOwnerIndex]):
-			ownerStandings[0] += 1
-		else:
-			ownerStandings[1] += 1
+		for player in optimalScoringPlayers:
+			totalWeekPoints[1][index] += player[9]
+
+	# update both standings maps from totalWeekPoints
+	UpdateStandings(owners, results.standings, totalWeekPoints[0])
+	UpdateStandings(owners, results.standingsOptimal, totalWeekPoints[1])
 
 '''
 Load stats for every single page found in directory
 '''
-def LoadStats(results, useTestDir, loadWrongDecisions):
+def LoadStats(results, useTestDir):
 
 	dirname = 'boxscores'
 	if useTestDir:
@@ -380,26 +390,23 @@ def LoadStats(results, useTestDir, loadWrongDecisions):
 
 	for item in os.listdir(dirname):
 		print(item)
-		LoadStatsForPage(dirname+'/'+item, loadWrongDecisions, results)
+		LoadStatsForPage(dirname+'/'+item, results)
 
 def main(argv):
 	try:
-		opts, args = getopt.getopt(argv,"tdw")
+		opts, args = getopt.getopt(argv,"td")
 	except getopt.GetoptError:
-		print("scrape.py -t [use test dir] -d [parse draft] -w [wrong decisions]")
+		print("scrape.py -t [use test dir] -d [parse draft]")
 		sys.exit(2)
 
 	loadDraft = False
 	useTestDir = False
-	loadWrongDecisions = False
 
 	for opt, arg in opts:
 		if opt == '-t':
 			useTestDir = True
 		elif opt == '-d':
 			loadDraft = True
-		elif opt == '-w':
-			loadWrongDecisions = True
 
 	results = Results()
 
@@ -407,7 +414,7 @@ def main(argv):
 		results.playerDraftMap = LoadDraft()
 
 	# Get all data and store in results
-	LoadStats(results, useTestDir, loadWrongDecisions)
+	LoadStats(results, useTestDir)
 
 	# Write all of the results out to csv files
 	results.Output()	
