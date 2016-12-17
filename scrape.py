@@ -49,7 +49,7 @@ class Results:
 	 		w.writerows(standingsList)
 
 	def Output(self):
-	 	self.outputRows("wrongdecisionsAll.csv", self.wrongDecisionsAll)
+	 	self.outputRows("wrongDecisionsAll.csv", self.wrongDecisionsAll)
 	 	self.outputRows("wrongDecisionsOptimal.csv", self.wrongDecisionsOptimal)
 	 	self.outputRows("playerData.csv", self.playerData)
 	 	self.outputStandings("standings.csv", self.standings)
@@ -180,9 +180,10 @@ def RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, wrongDecisions)
 	# get list of actual swaps and add to wrong decisions list
 	# There should be one swap (bench player) per removed starter
 	# it doesn't really matter which one
+	replacedPlayers = []
 	for removedStarter in startersRemovedFromLineup:
 		for starter in startingPlayers:
-			if starter[12] and DoesPosFitInSlot(removedStarter[7], starter[4]):
+			if starter[12] and DoesPosFitInSlot(removedStarter[7], starter[4]) and starter not in replacedPlayers:
 				wrongDecision = []
 				wrongDecision.append(starter[1])
 				wrongDecision.append(starter[0])
@@ -190,11 +191,8 @@ def RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, wrongDecisions)
 				wrongDecision.append(starter[5])
 				wrongDecision.append(starter[9] - removedStarter[9])
 				wrongDecisions.append(wrongDecision)
+				replacedPlayers.append(starter)
 				break
-		
-
-	# TODO ^ doesn't pick a one to one relationship, needs to skip
-	# over prevoiusly selected removed starters
 
 	return startingPlayers
 
@@ -331,6 +329,8 @@ def LoadStatsForPage(htmlFile, loadWrongDecisions, results):
 		owners.append(owner)
 
 	# total week points for each owner in same order as owner names
+	# totalWeekPoints[0]  total week points for starting lineups
+	# totalWeekPoints[1]  total week pints for optimal lineups
 	totalWeekPoints = [0,0]
 
 	for index,playerTable in enumerate(players):
