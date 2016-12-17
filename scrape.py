@@ -6,6 +6,55 @@ import sys
 import os
 import getopt
 
+class Results:
+	def __init__(self):
+
+		# owner -> [wins, losses, totalpoints]
+		self.standings = {}
+
+		# Standings if every owner set best starting lineup
+		self.optimalStandings = {}
+		
+		# Player -> [owner who drafted player, draft cost]
+		self.playerDraftMap = {}
+		
+		# Every wrong decision
+		# list of wrong decisions [owner, week, starter nane, bench name, points lost]
+		self.wrongDecisionsAll = []
+		
+		# Every unique wrong decision that would have resulted in optimal lineup
+		# list of wrong decisions [owner, week, starter nane, bench name, points lost]
+		self.wrongDecisionsOptimal = []
+
+		# Every individual player game data
+		# See comment at LoadStatsForTeam
+		self.playerData = []
+
+	def outputRows(self, filename, rows):
+		with open(filename, "w") as f:
+	 		w = csv.writer(f)
+	 		w.writerows(rows)
+
+	def outputStandings(self, filename, standings):
+	 	standingsList = []
+	 	for index,owner in enumerate(standings):
+	 		standing = []
+	 		standing.append(owner)
+	 		for val in standings[owner]:
+	 			standing.append(val)
+	 		standingsList.append(standing)
+
+	 	with open(filename, "w") as f:
+	 		w = csv.writer(f)
+	 		w.writerows(standingsList)
+
+	def Output(self):
+	 	self.outputRows("wrongdecisionsAll.csv", self.wrongDecisionsAll)
+	 	self.outputRows("wrongDecisionsOptimal.csv", self.wrongDecisionsOptimal)
+	 	self.outputRows("playerData.csv", self.playerData)
+	 	self.outputStandings("standings.csv", self.standings)
+	 	self.outputStandings("standingsOptimal.csv", self.optimalStandings)
+
 
 PosInSlotMap = 	{ 
 					'QB' : ['QB'],
@@ -27,9 +76,7 @@ Player Name
 Player Team
 Player Position
 Amount
-
 '''
-
 def LoadDraft():
 	rows = []
 
@@ -78,14 +125,25 @@ def LoadDraft():
 	return playerDraftMap
 
 
-
-def RunWrongDecisionsAlgo(startingScoreRowData, benchScoreRowData, wrongDecisions):
+#
+# Calculate the optimal lineup
+#
+# Output
+# 	list of optimal starters
+# 	list of wrong decisions (bench players that should have been started)
+#
+def RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, wrongDecisions):
 	
 	startingPlayers = startingScoreRowData[:]
 	
 	playersToInsert = benchScoreRowData[:]
 	startersRemovedFromLineup = []
 
+	# Attempts to set the optimal lineup
+	# by placing bench players into lineup where they
+	# get biggest points gain.
+	# The removed starter is then placed back into the queue
+	# to see if there is another spot for him
 	while len(playersToInsert) > 0:
 
 		player = playersToInsert.pop(0)
@@ -120,6 +178,8 @@ def RunWrongDecisionsAlgo(startingScoreRowData, benchScoreRowData, wrongDecision
 			startingPlayers[newSlot[0]] = player
 			
 	# get list of actual swaps and add to wrong decisions list
+	# There should be one swap (bench player) per removed starter
+	# it doesn't really matter which one
 	for removedStarter in startersRemovedFromLineup:
 		for starter in startingPlayers:
 			if starter[12] and DoesPosFitInSlot(removedStarter[7], starter[4]):
@@ -130,6 +190,11 @@ def RunWrongDecisionsAlgo(startingScoreRowData, benchScoreRowData, wrongDecision
 				wrongDecision.append(starter[5])
 				wrongDecision.append(starter[9] - removedStarter[9])
 				wrongDecisions.append(wrongDecision)
+				break
+		
+
+	# TODO ^ doesn't pick a one to one relationship, needs to skip
+	# over prevoiusly selected removed starters
 
 	return startingPlayers
 
@@ -235,7 +300,7 @@ def LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap
 	return scoreRowData
 
 
-def LoadStatsForPage(htmlFile, rows, playerDraftMap, standings, loadWrongDecisions, wrongDecisions):
+def LoadStatsForPage(htmlFile, loadWrongDecisions, results):
 
 	html = open(htmlFile, "r").read()
 	soup = BeautifulSoup(html, 'html.parser')
@@ -243,8 +308,10 @@ def LoadStatsForPage(htmlFile, rows, playerDraftMap, standings, loadWrongDecisio
   	# get week
   	week = soup.find('div', class_='games-pageheader').em.text[5:].strip()
 
+  	# get both players starting lineup tables
 	players = soup.find_all('table', class_='playerTableTable tableBody')
 
+	# get both players bench tables
 	benches = soup.find_all('table', class_='playerTableTable tableBody hideableGroup')
 
 	# Team names (these are annoyingly not unique across weeks if people changed theirs)
@@ -268,13 +335,13 @@ def LoadStatsForPage(htmlFile, rows, playerDraftMap, standings, loadWrongDecisio
 
 	for index,playerTable in enumerate(players):
 
-		startingScoreRowData = LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap)
+		startingScoreRowData = LoadStatsForTeam(playerTable, index, week, owners, teamNames, results.playerDraftMap)
 
 		playersToCount = []
 
 		if loadWrongDecisions:
-			benchScoreRowData = LoadStatsForTeam(benches[index], index, week, owners, teamNames, playerDraftMap)
-			playersToCount = RunWrongDecisionsAlgo(startingScoreRowData, benchScoreRowData, wrongDecisions)
+			benchScoreRowData = LoadStatsForTeam(benches[index], index, week, owners, teamNames, results.playerDraftMap)
+			playersToCount = RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, results.wrongDecisionsOptimal)
 		else:
 			playersToCount = startingScoreRowData
 
@@ -282,17 +349,16 @@ def LoadStatsForPage(htmlFile, rows, playerDraftMap, standings, loadWrongDecisio
 			totalWeekPoints[index] += player[9]
 
 		for row in startingScoreRowData:
-			rows.append(row)
-
+			results.playerData.append(row)
 
 	# update standings map from totalWeekPoints
 	for index,owner in enumerate(owners):
 		ownerStandings = []
 		try:
-			ownerStandings = standings[owner]
+			ownerStandings = results.standings[owner]
 		except KeyError:
-			standings[owner] = [0,0,0]
-			ownerStandings = standings[owner]
+			results.standings[owner] = [0,0,0]
+			ownerStandings = results.standings[owner]
 
 		ownerStandings[2] += totalWeekPoints[index]
 
@@ -303,16 +369,10 @@ def LoadStatsForPage(htmlFile, rows, playerDraftMap, standings, loadWrongDecisio
 		else:
 			ownerStandings[1] += 1
 
-
-def LoadStats(playerDraftMap, useTestDir, loadWrongDecisions):
-
-	rows = []
-
-	# owner -> [wins, losses, totalpoints]
-	standings = {}
-
-	# list of wrong decisions [owner, week, starter nane, bench name, points lost]
-	wrongDecisions = []
+'''
+Load stats for every single page found in directory
+'''
+def LoadStats(results, useTestDir, loadWrongDecisions):
 
 	dirname = 'boxscores'
 	if useTestDir:
@@ -320,31 +380,9 @@ def LoadStats(playerDraftMap, useTestDir, loadWrongDecisions):
 
 	for item in os.listdir(dirname):
 		print(item)
-		LoadStatsForPage(dirname + '/'+item, rows, playerDraftMap, standings, loadWrongDecisions, wrongDecisions)
-
-	with open("boxscoredatanew.csv", "w") as f:
-		writer = csv.writer(f)
-		writer.writerows(rows)
-
-	# Convert standings owner map to a list of standings
- 	standingsList = []
- 	for index,owner in enumerate(standings):
- 		standing = []
- 		standing.append(owner)
- 		for val in standings[owner]:
- 			standing.append(val)
- 		standingsList.append(standing)
-
- 	with open("standings.csv", "w") as f:
- 		w = csv.writer(f)
- 		w.writerows(standingsList)
-
- 	with open("wrongdecisions.csv", "w") as f:
- 		w = csv.writer(f)
- 		w.writerows(wrongDecisions)
+		LoadStatsForPage(dirname+'/'+item, loadWrongDecisions, results)
 
 def main(argv):
-
 	try:
 		opts, args = getopt.getopt(argv,"tdw")
 	except getopt.GetoptError:
@@ -363,12 +401,16 @@ def main(argv):
 		elif opt == '-w':
 			loadWrongDecisions = True
 
-	playerDraftMap = {} 
-	if loadDraft:
-		playerDraftMap = LoadDraft()
+	results = Results()
 
-	LoadStats(playerDraftMap, useTestDir, loadWrongDecisions)
-	
+	if loadDraft:
+		results.playerDraftMap = LoadDraft()
+
+	# Get all data and store in results
+	LoadStats(results, useTestDir, loadWrongDecisions)
+
+	# Write all of the results out to csv files
+	results.Output()	
                              
 if __name__ == '__main__':
     main(sys.argv[1:])
