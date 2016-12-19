@@ -1,4 +1,5 @@
 from itertools import chain
+from decimal import Decimal
 from bs4 import BeautifulSoup
 import csv
 from time import sleep
@@ -6,10 +7,20 @@ import sys
 import os
 import getopt
 
+class Standing:
+	def __init__(self):
+		self.points = 0
+		self.wins = 0
+		self.losses = 0
+		self.ties = 0
+
+	def toList(self, owner):
+		return [owner,self.wins,self.losses,self.ties,round(Decimal(self.points),2)]
+
 class Results:
 	def __init__(self):
 
-		# owner -> [wins, losses, totalpoints]
+		# owner -> Standing
 		self.standings = {}
 
 		# Standings if every owner set best starting lineup
@@ -38,10 +49,7 @@ class Results:
 	def outputStandings(self, filename, standings):
 	 	standingsList = []
 	 	for index,owner in enumerate(standings):
-	 		standing = []
-	 		standing.append(owner)
-	 		for val in standings[owner]:
-	 			standing.append(val)
+	 		standing = standings[owner].toList(owner)
 	 		standingsList.append(standing)
 
 	 	with open(filename, "w") as f:
@@ -159,7 +167,7 @@ def RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, wrongDecisions)
 
 			# Find the biggest point gain for our new player
 			pointDiff = player[9] - starter[9]
-			if pointDiff > newSlot[1]:
+			if round(pointDiff,2) > round(newSlot[1],2):
 				newSlot[0] = index
 				newSlot[1] = pointDiff
 
@@ -189,7 +197,7 @@ def RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, wrongDecisions)
 				wrongDecision.append(starter[0])
 				wrongDecision.append(removedStarter[5])
 				wrongDecision.append(starter[5])
-				wrongDecision.append(starter[9] - removedStarter[9])
+				wrongDecision.append(round(Decimal(starter[9] - removedStarter[9]),2))
 				wrongDecisions.append(wrongDecision)
 				replacedPlayers.append(starter)
 				break
@@ -278,7 +286,8 @@ def LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap
 
 		playerPoints = row.find('td', class_='playertableStat').text
 		try:
-			rowData.append(float(playerPoints))
+			points = float(playerPoints)
+			rowData.append(points)
 		except ValueError:
 			rowData.append(0.0)
 
@@ -300,21 +309,23 @@ def LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap
 
 def UpdateStandings(owners, standings, totalWeekPoints):
 	for index,owner in enumerate(owners):
-		ownerStandings = []
+		ownerStandings = None
 		try:
 			ownerStandings = standings[owner]
 		except KeyError:
-			standings[owner] = [0,0,0]
+			standings[owner] = Standing()
 			ownerStandings = standings[owner]
 
-		ownerStandings[2] += totalWeekPoints[index]
+		ownerStandings.points += totalWeekPoints[index]
 
 		oppOwnerIndex = (index+1) % 2
 
-		if( totalWeekPoints[index] > totalWeekPoints[oppOwnerIndex]):
-			ownerStandings[0] += 1
+		if round(totalWeekPoints[index],2) == round(totalWeekPoints[oppOwnerIndex],2):
+			ownerStandings.ties += 1
+		elif totalWeekPoints[index] > totalWeekPoints[oppOwnerIndex]:
+			ownerStandings.wins += 1
 		else:
-			ownerStandings[1] += 1
+			ownerStandings.losses += 1
 
 
 def LoadStatsForPage(htmlFile, results):
@@ -362,7 +373,7 @@ def LoadStatsForPage(htmlFile, results):
 			results.playerData.append(row)
 
 		for row in benchScoreRowData:
-			results.playerData.append(benchScoreRowData)
+			results.playerData.append(row)
 
 		# Get the optimal staring lineup
 		optimalScoringPlayers = RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, results.wrongDecisionsOptimal) 
