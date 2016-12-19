@@ -49,10 +49,17 @@ class RowData:
 		return str(self.__dict__)
 
 # One wrong lineup decision made by an owner
+# removedStarter and benchPlayer are both PlayerBoxScore instances
 class WrongDecision(RowData):
-	def __init__(self):
+	def __init__(self, replacedStarter, benchPlayer):
 		self.values = ["", 0, "", "", 0]
 		self.attrs =  ["owner", "week", "replacedStarter", "benchPlayer", "pointsLost"]
+
+		self.owner = replacedStarter.owner
+		self.week = replacedStarter.week
+		self.replacedStarter = replacedStarter.playerName
+		self.benchPlayer = benchPlayer.playerName
+		self.pointsLost = round(Decimal(benchPlayer.points - replacedStarter.points),2)
 
 # One week's performance for a single player
 class PlayerBoxScore(RowData):
@@ -193,12 +200,22 @@ def LoadDraft():
 # 	list of optimal starters
 # 	list of wrong decisions (bench players that should have been started)
 #
-def RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, wrongDecisions):
+def RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, optimalWrongDecisions, allWrongDecisions):
 	
 	startingPlayers = startingScoreRowData[:]
 	
 	playersToInsert = benchScoreRowData[:]
 	startersRemovedFromLineup = []
+
+	# Gather all possible wrong decisions
+	# This is list of any bench player that out scored any starter
+	for benchPlayer in benchScoreRowData:
+		for starter in startingScoreRowData:
+			if  not DoesPosFitInSlot(benchPlayer.pos, starter.slot):
+				continue
+
+			if benchPlayer.points > starter.points:
+				allWrongDecisions.append(WrongDecision(starter, benchPlayer))
 
 	# Attempts to set the optimal lineup
 	# by placing bench players into lineup where they
@@ -247,13 +264,8 @@ def RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, wrongDecisions)
 	for removedStarter in startersRemovedFromLineup:
 		for starter in startingPlayers:
 			if starter.isBench and DoesPosFitInSlot(removedStarter.pos, starter.slot) and starter not in replacedPlayers:
-				wrongDecision = WrongDecision();
-				wrongDecision.owner = starter.owner
-				wrongDecision.week = starter.week
-				wrongDecision.replacedStarter = removedStarter.playerName
-				wrongDecision.benchPlayer = starter.playerName
-				wrongDecision.pointsLost = round(Decimal(starter.points - removedStarter.points),2)
-				wrongDecisions.append(wrongDecision)
+				wrongDecision = WrongDecision(removedStarter, starter)
+				optimalWrongDecisions.append(wrongDecision)
 				replacedPlayers.append(starter)
 				break
 
@@ -406,7 +418,7 @@ def LoadStatsForPage(htmlFile, results):
 			results.playerData.append(row)
 
 		# Get the optimal staring lineup
-		optimalScoringPlayers = RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, results.wrongDecisionsOptimal) 
+		optimalScoringPlayers = RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, results.wrongDecisionsOptimal, results.wrongDecisionsAll) 
 
 		# Calculate total week points for both starting lineup
 		# and the optimal starting lineup
