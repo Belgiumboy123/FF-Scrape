@@ -83,8 +83,13 @@ class Results:
 		# owner -> Standing
 		self.standings = {}
 
-		# Standings if every owner set best starting lineup
+		# Standings if every owner set optimal starting lineup
 		self.standingsOptimal = {}
+
+		# owner -> {owner -> Standing}
+		# Map of standings for each owner
+		# if just that owner made optimal starting lineup
+		self.standingsIndividualOptimal = {}
 		
 		# Player -> [owner who drafted player, draft cost]
 		self.playerDraftMap = {}
@@ -117,12 +122,16 @@ class Results:
 	 		w.writerows(standingsList)
 
 	def Output(self):
-	 	self.outputRows("wrongDecisionsAll.csv", self.wrongDecisionsAll)
-	 	self.outputRows("wrongDecisionsOptimal.csv", self.wrongDecisionsOptimal)
-	 	self.outputRows("playerData.csv", self.playerData)
-	 	self.outputStandings("standings.csv", self.standings)
-	 	self.outputStandings("standingsOptimal.csv", self.standingsOptimal)
+	 	self.outputRows("results/wrongDecisionsAll.csv", self.wrongDecisionsAll)
+	 	self.outputRows("results/wrongDecisionsOptimal.csv", self.wrongDecisionsOptimal)
+	 	self.outputRows("results/playerData.csv", self.playerData)
+	 	self.outputStandings("results/standings.csv", self.standings)
+	 	self.outputStandings("results/standingsOptimal.csv", self.standingsOptimal)
 
+	 	for index,owner in enumerate(self.standingsIndividualOptimal):
+	 		standings = self.standingsIndividualOptimal[owner]
+	 		filename = "results/standingsOptimal-"+owner+".csv"
+	 		self.outputStandings(filename,standings)
 
 PosInSlotMap = 	{ 
 					'QB' : ['QB'],
@@ -402,8 +411,10 @@ def LoadStatsForPage(htmlFile, results):
 
 	# total week points for each owner in same order as owner names
 	# totalWeekPoints[0]  total week points for starting lineups
-	# totalWeekPoints[1]  total week pints for optimal lineups
-	totalWeekPoints = [[0,0],[0,0]]
+	# totalWeekPoints[1]  total week points for optimal lineups
+	# totalWeekPoints[2]  total week points for owner[0] optimal standings
+	# totalWeekPoints[3]  total week points for owner[1] optimal standings
+	totalWeekPoints = [[0,0],[0,0],[0,0],[0,0]]
 
 	for index,playerTable in enumerate(players):
 
@@ -423,14 +434,30 @@ def LoadStatsForPage(htmlFile, results):
 		# Calculate total week points for both starting lineup
 		# and the optimal starting lineup
 		for player in startingScoreRowData:
-			totalWeekPoints[0][index] += player[9]
+			totalWeekPoints[0][index] += player.points
+
+			# update points to other owner's optimal standings
+			oppOwnerOptimalIndex = ((index+1)%2) + 2
+			totalWeekPoints[oppOwnerOptimalIndex][index] += player.points
 
 		for player in optimalScoringPlayers:
-			totalWeekPoints[1][index] += player[9]
+			totalWeekPoints[1][index] += player.points
+			totalWeekPoints[index+2][index] += player.points
 
 	# update both standings maps from totalWeekPoints
 	UpdateStandings(owners, results.standings, totalWeekPoints[0])
 	UpdateStandings(owners, results.standingsOptimal, totalWeekPoints[1])
+
+	# update standings for each owner optimal standings
+	for index,owner in enumerate(owners):
+		standings = None
+		try:
+			standings = results.standingsIndividualOptimal[owner]
+		except KeyError:
+			results.standingsIndividualOptimal[owner] = {}
+			standings = results.standingsIndividualOptimal[owner]
+
+		UpdateStandings(owners, standings, totalWeekPoints[index+2])
 
 '''
 Load stats for every single page found in directory
