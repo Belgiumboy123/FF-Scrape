@@ -1,11 +1,64 @@
-from itertools import chain
-from decimal import Decimal
 from bs4 import BeautifulSoup
+from decimal import Decimal
+from itertools import chain
 import csv
-from time import sleep
-import sys
-import os
 import getopt
+import os
+import sys
+
+# Base class used to hold generic data
+# The csv writer works on arrays so this class
+# Wraps an array giving user ability to set named attributes
+# on am instance.
+class RowData:
+
+	# values and attrs arrays must be of same length
+	# each index maps to the other in same array
+	# default values are set in derived class constructor
+	def __init__(self):
+		self.values = []
+		self.attrs =  []
+
+	# Order in which fields get written to file
+	def __getitem__(self, i):
+		return self.values[i]
+
+	# if 'attrs' field doesn't exist yet, set attr as normal
+	# otherwise this will crash if 'attr' isn't in self.attrs list
+	def __setattr__(self, attr, value):
+		if "attrs" not in self.__dict__:
+			self.__dict__[attr] = value
+		else:
+			attrIndex = self.__dict__["attrs"].index(attr)
+			self.__dict__["values"][attrIndex] = value	
+
+	def __getattr__(self, attr):
+		if attr in self.__dict__:
+			return self.__dict__[attr]
+		else:
+			attrIndex = self.__dict__["attrs"].index(attr)
+			return self.__dict__["values"][attrIndex]
+
+	def __len__(self):
+		return len(self.values)
+
+	def __eq__(self, other):
+		return self.values == other.values
+
+	def __str__(self):
+		return str(self.__dict__)
+
+# One wrong lineup decision made by an owner
+class WrongDecision(RowData):
+	def __init__(self):
+		self.values = ["", 0, "", "", 0]
+		self.attrs =  ["owner", "week", "replacedStarter", "benchPlayer", "pointsLost"]
+
+# One week's performance for a single player
+class PlayerBoxScore(RowData):
+	def __init__(self):
+		self.values = [0, "", "", "", "", "", "", "", "", 0.0, "", "", False]
+		self.attrs = ["week", "owner", "team", "opponent", "slot", "playerName", "playerTeam", "pos", "playerOpp", "points", "draftOwner", "draftAmount", "isBench"]
 
 class Standing:
 	def __init__(self):
@@ -30,11 +83,11 @@ class Results:
 		self.playerDraftMap = {}
 		
 		# Every wrong decision
-		# list of wrong decisions [owner, week, starter nane, bench name, points lost]
+		# list of WrongDecisions
 		self.wrongDecisionsAll = []
 		
 		# Every unique wrong decision that would have resulted in optimal lineup
-		# list of wrong decisions [owner, week, starter nane, bench name, points lost]
+		# list of WrongDecisions
 		self.wrongDecisionsOptimal = []
 
 		# Every individual player game data
@@ -78,13 +131,13 @@ PosInSlotMap = 	{
 def DoesPosFitInSlot(pos, slot):
 	return pos in PosInSlotMap[slot]
 
-'''
-Fantasy Team Name
-Player Name
-Player Team
-Player Position
-Amount
-'''
+#
+# Fantasy Team Name
+# Player Name
+# Player Team
+# Player Position
+# Amount
+#
 def LoadDraft():
 	rows = []
 
@@ -100,8 +153,8 @@ def LoadDraft():
 
 			rowData = []
 			
-			#Need to grab the owner name because
-			#We have one too many 'Butt Stuffs' in our league
+			# Need to grab the owner name because
+			# We have one too many 'Butt Stuffs' in our league
 			title = team.a['title']
 			idxStart = title.index('(')
 			idxEnd = title.index(')')
@@ -156,17 +209,19 @@ def RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, wrongDecisions)
 
 		player = playersToInsert.pop(0)
 
-		if player[9] <= 0:
+		if player.points <= 0:
 			continue
 
+		# newSlot[0] is the index of starter
+		# newSlot[1] is the point difference
 		newSlot = [-1,0]
 
 		for index,starter in enumerate(startingPlayers):
-			if not DoesPosFitInSlot(player[7], starter[4]):
+			if not DoesPosFitInSlot(player.pos, starter.slot):
 				continue
 
 			# Find the biggest point gain for our new player
-			pointDiff = player[9] - starter[9]
+			pointDiff = player.points - starter.points
 			if round(pointDiff,2) > round(newSlot[1],2):
 				newSlot[0] = index
 				newSlot[1] = pointDiff
@@ -178,11 +233,11 @@ def RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, wrongDecisions)
 			playerToRemove = startingPlayers[newSlot[0]]
 			playersToInsert.append(playerToRemove)
 
-			if not playerToRemove[12]:
+			if not playerToRemove.isBench:
 				startersRemovedFromLineup.append(startingPlayers[newSlot[0]])
 
 			# set player's slot and place into the starting lineup!
-			player[4] = playerToRemove[4]
+			player.slot = playerToRemove.slot
 			startingPlayers[newSlot[0]] = player
 			
 	# get list of actual swaps and add to wrong decisions list
@@ -191,13 +246,13 @@ def RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, wrongDecisions)
 	replacedPlayers = []
 	for removedStarter in startersRemovedFromLineup:
 		for starter in startingPlayers:
-			if starter[12] and DoesPosFitInSlot(removedStarter[7], starter[4]) and starter not in replacedPlayers:
-				wrongDecision = []
-				wrongDecision.append(starter[1])
-				wrongDecision.append(starter[0])
-				wrongDecision.append(removedStarter[5])
-				wrongDecision.append(starter[5])
-				wrongDecision.append(round(Decimal(starter[9] - removedStarter[9]),2))
+			if starter.isBench and DoesPosFitInSlot(removedStarter.pos, starter.slot) and starter not in replacedPlayers:
+				wrongDecision = WrongDecision();
+				wrongDecision.owner = starter.owner
+				wrongDecision.week = starter.week
+				wrongDecision.replacedStarter = removedStarter.playerName
+				wrongDecision.benchPlayer = starter.playerName
+				wrongDecision.pointsLost = round(Decimal(starter.points - removedStarter.points),2)
 				wrongDecisions.append(wrongDecision)
 				replacedPlayers.append(starter)
 				break
@@ -205,22 +260,8 @@ def RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, wrongDecisions)
 	return startingPlayers
 
 #
-# Return list of players row data from the given playerTable
+# Return list of PlayerBoxScore row data from the given playerTable
 #
-# ScoreRowData
-# 0   Week
-# 1   Owner name
-# 2   TeamName
-# 3   Fantasy Opp
-# 4   Slot
-# 5	  Player Name
-# 6   Team
-# 7   Pos
-# 8   player - Opp
-# 9   Pts
-# 10  Draft Owner
-# 11  Draft Amount
-# 12  is original bench
 def LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap):
 
 	scoreRowData = []
@@ -228,11 +269,11 @@ def LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap
 	playerRows = playerTable.find_all('tr', class_='pncPlayerRow')
 		
 	for row in playerRows:
-		rowData = []
-		rowData.append(week)
-		rowData.append(owners[index])
-		rowData.append(teamNames[index])
-		rowData.append(teamNames[(index+1)%2])
+		playerData = PlayerBoxScore()
+		playerData.week = week
+		playerData.owner = owners[index]
+		playerData.team = teamNames[index]
+		playerData.opponent = teamNames[(index+1)%2]
 
 		isDefense = False
 		isBench = False
@@ -247,49 +288,38 @@ def LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap
 		elif slot == 'Bench':
 			isBench = True
 
-
-		rowData.append(slot)
+		playerData.slot = slot
 
 		playerInfo = row.find('td', class_='playertablePlayerName')
 
 		# Some terrible human forgot to start anyone at all
 		if playerInfo is None:
-			rowData.append("")
-			rowData.append("")
-			rowData.append("")
-			rowData.append("")
-			rowData.append(0.0)
-			rowData.append("")
-			rowData.append("")
-			rowData.append(False)
-			scoreRowData.append(rowData)
+			scoreRowData.append(playerData)
 			continue
 
 		playerName = playerInfo.a.text.strip()
-		rowData.append(playerName)
+		playerData.playerName = playerName
 
 		if isDefense:
-			rowData.append("")  #TODO get team name and convert to 3 letter shorthand
-			rowData.append("Defense")
+			playerData.pos = "Defense"
 		else:
 			playerInfoString = playerInfo.text.strip()
 			if isBench and playerInfoString.find(",") == -1:
 				# Defenses on the bench have no commas
-				rowData.append("")
-				rowData.append("Defense")
+				playerData.pos = "Defense"
 			else:
 				details = playerInfoString.split(",")[1].strip().split()
-				rowData.append(details[0])
-				rowData.append(details[1])
+				playerData.playerTeam = details[0]
+				playerData.pos = details[1]
 
-		rowData.append(row.find('td', class_='').text)
+		playerData.playerOpp = row.find('td', class_='').text
 
 		playerPoints = row.find('td', class_='playertableStat').text
 		try:
 			points = float(playerPoints)
-			rowData.append(points)
+			playerData.points = points
 		except ValueError:
-			rowData.append(0.0)
+			pass
 
 		draftInfo = ["", ""]
 
@@ -298,11 +328,11 @@ def LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap
 		except KeyError:
 			pass
 
-		rowData.append(draftInfo[0])
-		rowData.append(draftInfo[1])
-		rowData.append(isBench)
+		playerData.draftOwner = draftInfo[0]
+		playerData.draftAmount = draftInfo[1]
+		playerData.isBench = isBench
 
-		scoreRowData.append(rowData)
+		scoreRowData.append(playerData)
 
 	return scoreRowData
 
@@ -432,3 +462,4 @@ def main(argv):
                              
 if __name__ == '__main__':
     main(sys.argv[1:])
+
