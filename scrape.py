@@ -4,6 +4,7 @@ from itertools import chain
 import csv
 import getopt
 import os
+import requests
 import sys
 
 # Base class used to hold generic data
@@ -73,9 +74,24 @@ class Standing:
 		self.wins = 0
 		self.losses = 0
 		self.ties = 0
+		self.madePlayoffs = False
 
 	def toList(self, owner):
-		return [owner,self.wins,self.losses,self.ties,round(Decimal(self.points),2)]
+		return [owner,self.wins,self.losses,self.ties,round(Decimal(self.points),2),self.madePlayoffs]
+
+	# comment here
+	def __cmp__(self, other):
+		if self.wins > other.wins:
+			return -1 
+		elif self.wins == other.wins:
+			# should check ties/losses here first
+			# TODO This will break when comparing ties
+			if self.points > other.points:
+				return -1
+			else:
+				return 0
+		else:
+			return 1
 
 class Results:
 	def __init__(self):
@@ -105,6 +121,10 @@ class Results:
 		# Every individual player game data
 		# See comment at LoadStatsForTeam
 		self.playerData = []
+
+		# The two divisions.
+		# Division -> list of owners
+		self.divisions = { "east" : [], "west" : [] }
 
 	def outputRows(self, filename, rows):
 		with open(filename, "w") as f:
@@ -147,6 +167,15 @@ PosInSlotMap = 	{
 def DoesPosFitInSlot(pos, slot):
 	return pos in PosInSlotMap[slot]
 
+# Given a link element parse out owner name from title.
+# Format is 'team name (owner name)'
+def ParseOwner(linkTag):
+	title = linkTag['title']
+	idxStart = title.index('(')
+	idxEnd = title.index(')')
+	owner = title[idxStart+1:idxEnd]
+	return owner
+
 #
 # Fantasy Team Name
 # Player Name
@@ -171,10 +200,7 @@ def LoadDraft():
 			
 			# Need to grab the owner name because
 			# We have one too many 'Butt Stuffs' in our league
-			title = team.a['title']
-			idxStart = title.index('(')
-			idxEnd = title.index(')')
-			owner = title[idxStart+1:idxEnd]
+			owner = ParseOwner(team.a)
 			rowData.append(owner)
 
 			data = player.find_all('td')
@@ -201,6 +227,79 @@ def LoadDraft():
 
 	return playerDraftMap
 
+def CalculatePlayoffTeams(divisions, standings):
+
+	eastTeams = []
+	westTeams = []
+
+	for index,owner in enumerate(standings):
+		if owner in divisions["east"]:
+			eastTeams.append(standings[owner])
+		else:
+			westTeams.append(standings[owner])
+
+	eastTeams.sort()
+	westTeams.sort()
+
+	eastTeams[0].madePlayoffs = True
+	westTeams[0].madePlayoffs = True
+
+	eastIndex = 1
+	westIndex = 1
+	if eastTeams[1].__cmp__(westTeams[1]) == -1:
+		eastTeams[1].madePlayoffs = True
+		eastIndex = 2
+	else:
+		westTeams[1].madePlayoffs = True
+		westIndex = 2
+
+	if eastTeams[eastIndex].__cmp__(westTeams[westIndex]) == -1:
+		eastTeams[eastIndex].madePlayoffs = True
+	else:
+		westTeams[westIndex].madePlayoffs = True
+
+#
+# First get divisions webpage
+# Save division into results
+# Calulate all playoff teams based on final standings
+# This assumes all standings in results have been calculated
+#
+def LoadDivisions(results):
+	
+	divisionFiles = os.listdir('divisions')
+	content = None
+
+	if len(divisionFiles) == 0:
+		url = "http://games.espn.go.com/ffl/standings?leagueId=524258&seasonId=2016"
+		content = requests.get(url).content
+		with open('divisions/divisions.html', 'wb') as f:
+			f.write(content)
+	else:
+		content = open("divisions/"+divisionFiles[0], "r").read()
+	
+	soup = BeautifulSoup(content, 'html.parser')
+
+	mainDiv = soup.find('div', class_='games-fullcol')
+	tables = mainDiv.find_all('table', class_='tableBody')
+
+	for index,table in enumerate(tables):
+		teams = table.find_all('tr', class_="tableBody")
+		if len(teams) is 0:
+			continue
+
+		division = "east"
+		if index is 1:
+			division = "west"
+
+		for team in teams:
+			owner = ParseOwner(team.find('a'))
+			results.divisions[division].append(owner)
+
+	# figure out top 4 playoff teams for each standings
+	CalculatePlayoffTeams(results.divisions, results.standings)
+	CalculatePlayoffTeams(results.divisions, results.standingsOptimal)
+	for index,owner in enumerate(results.standingsIndividualOptimal):
+		CalculatePlayoffTeams(results.divisions, results.standingsIndividualOptimal[owner])
 
 #
 # Calculate the optimal lineup
@@ -493,8 +592,12 @@ def main(argv):
 	if loadDraft:
 		results.playerDraftMap = LoadDraft()
 
-	# Get all data and store in results
+	# Get all boxscore data and store in results
 	LoadStats(results, useTestDir)
+
+	# Load up divisions
+	# and calculate playoff teams for all standings
+	LoadDivisions(results)
 
 	# Write all of the results out to csv files
 	results.Output()	
