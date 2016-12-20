@@ -241,6 +241,11 @@ def CalculatePlayoffTeams(divisions, standings):
 	eastTeams.sort()
 	westTeams.sort()
 
+	# Don't bother with playoff teams with less than
+	# 5 teams in either division
+	if len(eastTeams) < 5 or len(westTeams) < 5:
+		return
+
 	eastTeams[0].madePlayoffs = True
 	westTeams[0].madePlayoffs = True
 
@@ -511,9 +516,7 @@ def LoadStatsForPage(htmlFile, results):
 	# total week points for each owner in same order as owner names
 	# totalWeekPoints[0]  total week points for starting lineups
 	# totalWeekPoints[1]  total week points for optimal lineups
-	# totalWeekPoints[2]  total week points for owner[0] optimal standings
-	# totalWeekPoints[3]  total week points for owner[1] optimal standings
-	totalWeekPoints = [[0,0],[0,0],[0,0],[0,0]]
+	totalWeekPoints = [[0,0],[0,0]]
 
 	for index,playerTable in enumerate(players):
 
@@ -535,28 +538,12 @@ def LoadStatsForPage(htmlFile, results):
 		for player in startingScoreRowData:
 			totalWeekPoints[0][index] += player.points
 
-			# update points to other owner's optimal standings
-			oppOwnerOptimalIndex = ((index+1)%2) + 2
-			totalWeekPoints[oppOwnerOptimalIndex][index] += player.points
-
 		for player in optimalScoringPlayers:
 			totalWeekPoints[1][index] += player.points
-			totalWeekPoints[index+2][index] += player.points
 
 	# update both standings maps from totalWeekPoints
 	UpdateStandings(owners, results.standings, totalWeekPoints[0])
 	UpdateStandings(owners, results.standingsOptimal, totalWeekPoints[1])
-
-	# update standings for each owner optimal standings
-	for index,owner in enumerate(owners):
-		standings = None
-		try:
-			standings = results.standingsIndividualOptimal[owner]
-		except KeyError:
-			results.standingsIndividualOptimal[owner] = {}
-			standings = results.standingsIndividualOptimal[owner]
-
-		UpdateStandings(owners, standings, totalWeekPoints[index+2])
 
 '''
 Load stats for every single page found in directory
