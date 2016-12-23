@@ -89,7 +89,8 @@ class Standing:
 	def toList(self, owner):
 		return [owner,self.wins,self.losses,self.ties,round(Decimal(self.points),2),self.madePlayoffs]
 
-	# comment here
+	# Compare two separate team standings
+	# The higher placed standing
 	def __cmp__(self, other):
 		if self.wins > other.wins:
 			return -1 
@@ -143,6 +144,11 @@ class Results:
 		for owner in self.divisions["east"] + self.divisions["west"]:
 			self.standings[owner] = Standing()
 			self.standingsOptimal[owner] = Standing()
+
+			# initialize individual optimal standings here
+			self.standingsIndividualOptimal[owner] = {}
+			for ownerOpt in self.divisions["east"] + self.divisions["west"]:
+				self.standingsIndividualOptimal[owner][ownerOpt] = Standing()
 
 	def CalculatePlayoffTeams(self):
 		# figure out top 4 playoff teams for each standings
@@ -473,9 +479,18 @@ def LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap
 
 
 #
+# For optimal owner update with optimal week points for that owner
+# Otherwise update with regular scored points
 #
-def UpdateIndividualOptimalStandings(owners, ownerOptimal, totalWeekPointsRegular, totalWeekPointsOptimal, results):
-	pass
+def UpdateIndividualOptimalStandings(owners, totalWeekPointsRegular, totalWeekPointsOptimal1, totalWeekPointsOptimal2, results):
+	for index,owner in enumerate(results.standingsIndividualOptimal):
+		if owner == owners[0]:
+			UpdateStandings(owners, results.standingsIndividualOptimal[owner], totalWeekPointsOptimal1)
+		elif owner == owners[1]:
+			UpdateStandings(owners, results.standingsIndividualOptimal[owner], totalWeekPointsOptimal2)
+		else:
+			UpdateStandings(owners, results.standingsIndividualOptimal[owner], totalWeekPointsRegular)
+
 
 def UpdateStandings(owners, standings, totalWeekPoints):
 	for index,owner in enumerate(owners):
@@ -561,8 +576,7 @@ def LoadStatsForPage(htmlFile, results):
 	# update both standings maps from totalWeekPoints
 	UpdateStandings(owners, results.standings, totalWeekPoints[0])
 	UpdateStandings(owners, results.standingsOptimal, totalWeekPoints[1])
-	UpdateIndividualOptimalStandings(owners, owners[0], totalWeekPoints[0], totalWeekPoints[2], results)
-	UpdateIndividualOptimalStandings(owners, owners[1], totalWeekPoints[0], totalWeekPoints[3], results)
+	UpdateIndividualOptimalStandings(owners, totalWeekPoints[0], totalWeekPoints[2], totalWeekPoints[3], results)
 
 '''
 Load stats for every single page found in directory
@@ -572,14 +586,16 @@ def LoadStats(results, useTestDir):
 	dirname = 'boxscores'
 	if useTestDir:
 		dirname = 'test'
+	else:
+		# TODO
+		# if directory is empty
+		# download all the boxscores
+		pass
 
 	for item in os.listdir(dirname):
 		print(item)
 		LoadStatsForPage(dirname+'/'+item, results)
 
-#
-#
-#
 def main(argv):
 	try:
 		opts, args = getopt.getopt(argv,"t")
