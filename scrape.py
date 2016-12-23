@@ -7,6 +7,10 @@ import os
 import requests
 import sys
 
+# List of urls used to download files
+DraftUrl = "http://games.espn.com/ffl/tools/draftrecap?leagueId=524258&year=2016"
+StandingsUrl = "http://games.espn.go.com/ffl/standings?leagueId=524258&seasonId=2016"
+
 # Base class used to hold generic data
 # The csv writer works on arrays so this class
 # Wraps an array giving user ability to set named attributes
@@ -68,6 +72,12 @@ class PlayerBoxScore(RowData):
 		self.values = [0, "", "", "", "", "", "", "", "", 0.0, "", "", False]
 		self.attrs = ["week", "owner", "team", "opponent", "slot", "playerName", "playerTeam", "pos", "playerOpp", "points", "draftOwner", "draftAmount", "isBench"]
 
+# Individual auction draft result
+class PlayerDraftInfo(RowData):
+	def __init__(self):
+		self.values = ["","","","", 0]
+		self.attrs = ["owner", "playerName", "playerTeam", "pos", "draftAmount"]
+
 class Standing:
 	def __init__(self):
 		self.points = 0
@@ -109,6 +119,9 @@ class Results:
 		
 		# Player -> [owner who drafted player, draft cost]
 		self.playerDraftMap = {}
+
+		# list of [owner, player name, player team, pos, draft cost]
+		self.allDraftData = []
 		
 		# Every wrong decision
 		# list of WrongDecisions
@@ -125,6 +138,18 @@ class Results:
 		# The two divisions.
 		# Division -> list of owners
 		self.divisions = { "east" : [], "west" : [] }
+
+	def InitializeWithOwners(self):
+		for owner in self.divisions["east"] + self.divisions["west"]:
+			self.standings[owner] = Standing()
+			self.standingsOptimal[owner] = Standing()
+
+	def CalculatePlayoffTeams(self):
+		# figure out top 4 playoff teams for each standings
+		CalculatePlayoffTeams(self.divisions, self.standings)
+		CalculatePlayoffTeams(self.divisions, self.standingsOptimal)
+		for index,owner in enumerate(self.standingsIndividualOptimal):
+			CalculatePlayoffTeams(self.divisions, self.standingsIndividualOptimal[owner])
 
 	def outputRows(self, filename, rows):
 		with open(filename, "w") as f:
@@ -145,6 +170,7 @@ class Results:
 	 	self.outputRows("results/wrongDecisionsAll.csv", self.wrongDecisionsAll)
 	 	self.outputRows("results/wrongDecisionsOptimal.csv", self.wrongDecisionsOptimal)
 	 	self.outputRows("results/playerData.csv", self.playerData)
+	 	self.outputRows("results/draft.csv", self.allDraftData)
 	 	self.outputStandings("results/standings.csv", self.standings)
 	 	self.outputStandings("results/standingsOptimal.csv", self.standingsOptimal)
 
@@ -167,6 +193,21 @@ PosInSlotMap = 	{
 def DoesPosFitInSlot(pos, slot):
 	return pos in PosInSlotMap[slot]
 
+
+def LoadContent(url, directory, proposedFileName):
+
+	files = os.listdir(directory)
+	content = None
+
+	if len(files) == 0:
+		content = requests.get(url).content
+		with open(directory+ "/" + proposedFileName, 'wb') as f:
+			f.write(content)
+	else:
+		content = open(directory+"/"+files[0], "r").read()
+
+	return content
+
 # Given a link element parse out owner name from title.
 # Format is 'team name (owner name)'
 def ParseOwner(linkTag):
@@ -176,56 +217,41 @@ def ParseOwner(linkTag):
 	owner = title[idxStart+1:idxEnd]
 	return owner
 
-#
-# Fantasy Team Name
-# Player Name
-# Player Team
-# Player Position
-# Amount
-#
-def LoadDraft():
-	rows = []
+def LoadDraft(results):
 
-	html = open("draft/draft.html", "r").read()
-	soup = BeautifulSoup(html, 'html.parser')
+	content = LoadContent(DraftUrl, "draft", "draft.html")
 
-	# player -> [draft owner, auction value]
-	playerDraftMap = {}
-	
+	soup = BeautifulSoup(content, 'html.parser')
+
 	for team in soup.find_all('tr', class_='tableHead'):
 		
 		for player in team.find_next_siblings('tr'):
 
-			rowData = []
+			playerDraftInfo = PlayerDraftInfo()
 			
 			# Need to grab the owner name because
 			# We have one too many 'Butt Stuffs' in our league
 			owner = ParseOwner(team.a)
-			rowData.append(owner)
+			playerDraftInfo.owner = owner
 
 			data = player.find_all('td')
 			playerName = data[1].a.text.strip()
-			rowData.append(playerName)
+			playerDraftInfo.playerName = playerName
+
 			playerData = data[1].text.strip()
 			if 'D/ST' in playerData:
-				rowData.append("") # defensive team name.
-				rowData.append("Defense")
+				playerDraftInfo.playerTeam = ""
+				playerDraftInfo.pos = "Defense"
 			else:
 				playerDetails = playerData.split(',')[1].strip().split()
-				rowData.append(playerDetails[0])
-				rowData.append(playerDetails[1])
+				playerDraftInfo.playerTeam = playerDetails[0]
+				playerDraftInfo.pos = playerDetails[1]
 
 			amount = data[2].text.strip()[1:]
-			rowData.append(amount)
+			playerDraftInfo.draftAmount = amount
 
-			playerDraftMap[str(playerName)] = [str(owner), str(amount)]
-			rows.append(rowData)
-
-	with open("draft.csv", "w") as f:
-		writer = csv.writer(f)
-		writer.writerows(rows)
-
-	return playerDraftMap
+			results.playerDraftMap[str(playerName)] = [str(owner), str(amount)]
+			results.allDraftData.append(playerDraftInfo)
 
 def CalculatePlayoffTeams(divisions, standings):
 
@@ -251,17 +277,13 @@ def CalculatePlayoffTeams(divisions, standings):
 
 	eastIndex = 1
 	westIndex = 1
-	if eastTeams[1].__cmp__(westTeams[1]) == -1:
-		eastTeams[1].madePlayoffs = True
-		eastIndex = 2
-	else:
-		westTeams[1].madePlayoffs = True
-		westIndex = 2
-
-	if eastTeams[eastIndex].__cmp__(westTeams[westIndex]) == -1:
-		eastTeams[eastIndex].madePlayoffs = True
-	else:
-		westTeams[westIndex].madePlayoffs = True
+	for i in range(0,2):
+		if eastTeams[eastIndex].__cmp__(westTeams[westIndex]) == -1:
+			eastTeams[eastIndex].madePlayoffs = True
+			eastIndex += 1
+		else:
+			westTeams[westIndex].madePlayoffs = True
+			westIndex += 1
 
 #
 # First get divisions webpage
@@ -270,18 +292,8 @@ def CalculatePlayoffTeams(divisions, standings):
 # This assumes all standings in results have been calculated
 #
 def LoadDivisions(results):
-	
-	divisionFiles = os.listdir('divisions')
-	content = None
 
-	if len(divisionFiles) == 0:
-		url = "http://games.espn.go.com/ffl/standings?leagueId=524258&seasonId=2016"
-		content = requests.get(url).content
-		with open('divisions/divisions.html', 'wb') as f:
-			f.write(content)
-	else:
-		content = open("divisions/"+divisionFiles[0], "r").read()
-	
+	content = LoadContent(StandingsUrl, "divisions", "divisions.html")
 	soup = BeautifulSoup(content, 'html.parser')
 
 	mainDiv = soup.find('div', class_='games-fullcol')
@@ -300,11 +312,9 @@ def LoadDivisions(results):
 			owner = ParseOwner(team.find('a'))
 			results.divisions[division].append(owner)
 
-	# figure out top 4 playoff teams for each standings
-	CalculatePlayoffTeams(results.divisions, results.standings)
-	CalculatePlayoffTeams(results.divisions, results.standingsOptimal)
-	for index,owner in enumerate(results.standingsIndividualOptimal):
-		CalculatePlayoffTeams(results.divisions, results.standingsIndividualOptimal[owner])
+
+	# initialize all maps relient on existing owners in results.
+	results.InitializeWithOwners()
 
 #
 # Calculate the optimal lineup
@@ -462,14 +472,14 @@ def LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap
 	return scoreRowData
 
 
+#
+#
+def UpdateIndividualOptimalStandings(owners, ownerOptimal, totalWeekPointsRegular, totalWeekPointsOptimal, results):
+	pass
+
 def UpdateStandings(owners, standings, totalWeekPoints):
 	for index,owner in enumerate(owners):
-		ownerStandings = None
-		try:
-			ownerStandings = standings[owner]
-		except KeyError:
-			standings[owner] = Standing()
-			ownerStandings = standings[owner]
+		ownerStandings = standings[owner]
 
 		ownerStandings.points += totalWeekPoints[index]
 
@@ -516,7 +526,9 @@ def LoadStatsForPage(htmlFile, results):
 	# total week points for each owner in same order as owner names
 	# totalWeekPoints[0]  total week points for starting lineups
 	# totalWeekPoints[1]  total week points for optimal lineups
-	totalWeekPoints = [[0,0],[0,0]]
+	# totalWeekPoints[2]  total week points for owner[0] optimal standings
+	# totalWeekPoints[3]  total week points for owner[1] optimal standings
+	totalWeekPoints = [[0,0],[0,0],[0,0],[0,0]]
 
 	for index,playerTable in enumerate(players):
 
@@ -538,12 +550,19 @@ def LoadStatsForPage(htmlFile, results):
 		for player in startingScoreRowData:
 			totalWeekPoints[0][index] += player.points
 
+			# update points to other owner's optimal standings
+			oppOwnerOptimalIndex = ((index+1)%2) + 2
+			totalWeekPoints[oppOwnerOptimalIndex][index] += player.points
+
 		for player in optimalScoringPlayers:
 			totalWeekPoints[1][index] += player.points
+			totalWeekPoints[index+2][index] += player.points
 
 	# update both standings maps from totalWeekPoints
 	UpdateStandings(owners, results.standings, totalWeekPoints[0])
 	UpdateStandings(owners, results.standingsOptimal, totalWeekPoints[1])
+	UpdateIndividualOptimalStandings(owners, owners[0], totalWeekPoints[0], totalWeekPoints[2], results)
+	UpdateIndividualOptimalStandings(owners, owners[1], totalWeekPoints[0], totalWeekPoints[3], results)
 
 '''
 Load stats for every single page found in directory
@@ -558,11 +577,14 @@ def LoadStats(results, useTestDir):
 		print(item)
 		LoadStatsForPage(dirname+'/'+item, results)
 
+#
+#
+#
 def main(argv):
 	try:
-		opts, args = getopt.getopt(argv,"td")
+		opts, args = getopt.getopt(argv,"t")
 	except getopt.GetoptError:
-		print("scrape.py -t [use test dir] -d [parse draft]")
+		print("scrape.py -t [use test dir]")
 		sys.exit(2)
 
 	loadDraft = False
@@ -571,20 +593,20 @@ def main(argv):
 	for opt, arg in opts:
 		if opt == '-t':
 			useTestDir = True
-		elif opt == '-d':
-			loadDraft = True
 
 	results = Results()
 
-	if loadDraft:
-		results.playerDraftMap = LoadDraft()
+	# Load all divisions and owners
+	LoadDivisions(results)
+
+	# Load all draft information
+	LoadDraft(results)
 
 	# Get all boxscore data and store in results
 	LoadStats(results, useTestDir)
 
-	# Load up divisions
-	# and calculate playoff teams for all standings
-	LoadDivisions(results)
+	# calculate playoff teams for all standings
+	results.CalculatePlayoffTeams()
 
 	# Write all of the results out to csv files
 	results.Output()	
