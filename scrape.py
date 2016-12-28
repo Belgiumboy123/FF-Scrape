@@ -3,13 +3,21 @@ from decimal import Decimal
 from itertools import chain
 import csv
 import getopt
+import glob
 import os
 import requests
+import subprocess
 import sys
 
 # List of urls used to download files
 DraftUrl = "http://games.espn.com/ffl/tools/draftrecap?leagueId=524258&year=2016"
 StandingsUrl = "http://games.espn.go.com/ffl/standings?leagueId=524258&seasonId=2016"
+ScheduleUrl = "http://games.espn.com/ffl/schedule?leagueId=524258"
+BoxScoreQuickUrl = "http://games.espn.com/ffl/boxscorequick?leagueId=524258&teamId={}&scoringPeriodId={}&seasonId=2016&view=scoringperiod&version=quick"
+
+def GetBoxScoreQuickUrl(teamId, scoringPeriodId):
+	return BoxScoreQuickUrl.format(teamId, scoringPeriodId)
+
 
 # Base class used to hold generic data
 # The csv writer works on arrays so this class
@@ -90,7 +98,7 @@ class Standing:
 		return [owner,self.wins,self.losses,self.ties,round(Decimal(self.points),2),self.madePlayoffs]
 
 	# Compare two separate team standings
-	# The higher placed standing
+	# The higher placed standing comes first
 	def __cmp__(self, other):
 		if self.wins > other.wins:
 			return -1 
@@ -202,15 +210,15 @@ def DoesPosFitInSlot(pos, slot):
 
 def LoadContent(url, directory, proposedFileName):
 
-	files = os.listdir(directory)
+	filepath = directory+ "/" + proposedFileName
 	content = None
 
-	if len(files) == 0:
+	if not os.path.exists(filepath):
 		content = requests.get(url).content
-		with open(directory+ "/" + proposedFileName, 'wb') as f:
+		with open(filepath, 'wb') as f:
 			f.write(content)
 	else:
-		content = open(directory+"/"+files[0], "r").read()
+		content = open(filepath, "r").read()
 
 	return content
 
@@ -340,7 +348,7 @@ def RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, optimalWrongDec
 	# This is list of any bench player that out scored any starter
 	for benchPlayer in benchScoreRowData:
 		for starter in startingScoreRowData:
-			if  not DoesPosFitInSlot(benchPlayer.pos, starter.slot):
+			if not DoesPosFitInSlot(benchPlayer.pos, starter.slot):
 				continue
 
 			if benchPlayer.points > starter.points:
@@ -578,6 +586,52 @@ def LoadStatsForPage(htmlFile, results):
 	UpdateStandings(owners, results.standingsOptimal, totalWeekPoints[1])
 	UpdateIndividualOptimalStandings(owners, totalWeekPoints[0], totalWeekPoints[2], totalWeekPoints[3], results)
 
+def DownloadBoxscores():
+	schedulesContent = LoadContent(ScheduleUrl, "schedules", "schedules.html")
+	soup = BeautifulSoup(schedulesContent, 'html.parser')
+
+	tables = soup.find_all('table', class_='tableBody')
+
+	# Remove league settings tables
+	# there should only be one table left after this
+	tables = [table for table in tables if "leagueSettingsTable" not in table["class"] ]
+	table = tables[0]
+
+	# Filter out all non matchup rows from table
+	tableRows = table.find_all('tr')
+	matchupRows = [row for row in tableRows if 'class' not in row.attrs]
+
+	matches = 0
+
+	for index,matchup in enumerate(matchupRows):
+
+		# There should be at least 5 table cells
+		cells = matchup.find_all('td')
+		if len(cells) < 5:
+			continue
+
+		scoringPeriodId = matches/5 + 1
+		matches += 1
+
+		# We only care about the regular season
+		if scoringPeriodId > 13:
+			break;
+
+		# Parse out the teamId
+		link = cells[0].a["href"]
+		teamIdIndex = link.index("teamId=")
+		link = link[teamIdIndex+7:]
+		teamId = link[:link.index('&')]
+
+		# Get Url and name the file
+		url = GetBoxScoreQuickUrl(teamId, scoringPeriodId)
+		filename = "week_" + str(scoringPeriodId) + ":_" + cells[1].text + "_vs_" + cells[4].text + ".html"
+
+		print("Downloading boxscore to file: " + filename)
+		print(url)
+
+		LoadContent(url, 'boxscores', filename)
+
 '''
 Load stats for every single page found in directory
 '''
@@ -587,28 +641,34 @@ def LoadStats(results, useTestDir):
 	if useTestDir:
 		dirname = 'test'
 	else:
-		# TODO
-		# if directory is empty
-		# download all the boxscores
-		pass
+		# if there are no files in boxscores directory
+		# download all boxscores from espn
+		if len(glob.glob(dirname +"/*.html")) == 0:
+			DownloadBoxscores()
 
 	for item in os.listdir(dirname):
+		if not item.endswith(".html"):
+			continue
+
 		print(item)
 		LoadStatsForPage(dirname+'/'+item, results)
 
 def main(argv):
 	try:
-		opts, args = getopt.getopt(argv,"t")
+		opts, args = getopt.getopt(argv,"tr")
 	except getopt.GetoptError:
-		print("scrape.py -t [use test dir]")
+		print("scrape.py -t [use test dir] -r [cleans all files]")
 		sys.exit(2)
 
-	loadDraft = False
 	useTestDir = False
-
 	for opt, arg in opts:
 		if opt == '-t':
 			useTestDir = True
+		elif opt == '-r':
+			# This option will terminate program after cleaning
+			# This option removes all files from the results folder.
+			subprocess.Popen('rm results/*.*', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+			sys.exit(0)
 
 	results = Results()
 
@@ -625,7 +685,7 @@ def main(argv):
 	results.CalculatePlayoffTeams()
 
 	# Write all of the results out to csv files
-	results.Output()	
+	results.Output()
                              
 if __name__ == '__main__':
     main(sys.argv[1:])
