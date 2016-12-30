@@ -339,28 +339,49 @@ def LoadDivisions(results):
 	results.InitializeWithOwners()
 
 #
+# Gather all possible wrong decisions
+# This is list of any bench player that out scored any starter
+#
+def GenerateAllWrongDecisions(startingScoreRowData, benchScoreRowData, allWrongDecisions):
+	
+	# Account of shuffling rb/wr to flex slots
+	# if there is a wr in flex or exflex
+		# that means a rb can replace any wr
+	# if there is a rb in flex or exflex
+		# that means a wr can replace any rb
+
+	rbCanCheckWr = False
+	wrCanCheckRb = False
+	for starter in startingScoreRowData:
+		if starter.slot == 'FLEX' or starter.slot == 'EX-FLEX':
+			if starter.pos == 'WR':
+				rbCanCheckWr = True
+			elif starter.pos == 'RB':
+				wrCanCheckRb = True
+
+	for benchPlayer in benchScoreRowData:
+		for starter in startingScoreRowData:
+			if (not DoesPosFitInSlot(benchPlayer.pos, starter.slot) and
+				not (benchPlayer.pos == 'WR' and starter.slot == 'RB' and wrCanCheckRb) and
+				not (benchPlayer.pos == 'RB' and starter.slot == 'WR' and rbCanCheckWr)):
+				continue
+
+			if benchPlayer.points > starter.points:
+				allWrongDecisions.append(WrongDecision(starter, benchPlayer))
+
+#
 # Calculate the optimal lineup
 #
 # Output
 # 	list of optimal starters
 # 	list of wrong decisions (bench players that should have been started)
 #
-def RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, optimalWrongDecisions, allWrongDecisions):
+def RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, optimalWrongDecisions):
 	
 	startingPlayers = startingScoreRowData[:]
 	
 	playersToInsert = benchScoreRowData[:]
 	startersRemovedFromLineup = []
-
-	# Gather all possible wrong decisions
-	# This is list of any bench player that out scored any starter
-	for benchPlayer in benchScoreRowData:
-		for starter in startingScoreRowData:
-			if not DoesPosFitInSlot(benchPlayer.pos, starter.slot):
-				continue
-
-			if benchPlayer.points > starter.points:
-				allWrongDecisions.append(WrongDecision(starter, benchPlayer))
 
 	# Attempts to set the optimal lineup
 	# by placing bench players into lineup where they
@@ -573,8 +594,11 @@ def LoadStatsForPage(htmlFile, results):
 		for row in benchScoreRowData:
 			results.playerData.append(row)
 
+		# Get all wrong decisions
+		GenerateAllWrongDecisions(startingScoreRowData, benchScoreRowData, results.wrongDecisionsAll)
+
 		# Get the optimal staring lineup
-		optimalScoringPlayers = RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, results.wrongDecisionsOptimal, results.wrongDecisionsAll) 
+		optimalScoringPlayers = RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, results.wrongDecisionsOptimal) 
 
 		# Calculate total week points for both starting lineup
 		# and the optimal starting lineup
