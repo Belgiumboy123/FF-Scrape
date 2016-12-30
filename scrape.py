@@ -10,14 +10,19 @@ import subprocess
 import sys
 
 # List of urls used to download files
-DraftUrl = "http://games.espn.com/ffl/tools/draftrecap?leagueId=524258&year=2016"
-StandingsUrl = "http://games.espn.go.com/ffl/standings?leagueId=524258&seasonId=2016"
+DraftUrl = "http://games.espn.com/ffl/tools/draftrecap?leagueId=524258&year={}"
+StandingsUrl = "http://games.espn.go.com/ffl/standings?leagueId=524258&seasonId={}"
 ScheduleUrl = "http://games.espn.com/ffl/schedule?leagueId=524258"
-BoxScoreQuickUrl = "http://games.espn.com/ffl/boxscorequick?leagueId=524258&teamId={}&scoringPeriodId={}&seasonId=2016&view=scoringperiod&version=quick"
+BoxScoreQuickUrl = "http://games.espn.com/ffl/boxscorequick?leagueId=524258&teamId={}&scoringPeriodId={}&seasonId={}&view=scoringperiod&version=quick"
 
-def GetBoxScoreQuickUrl(teamId, scoringPeriodId):
-	return BoxScoreQuickUrl.format(teamId, scoringPeriodId)
+def GetBoxScoreQuickUrl(teamId, scoringPeriodId, year):
+	return BoxScoreQuickUrl.format(teamId, scoringPeriodId, year)
 
+def GetStandingsUrl(year):
+	return StandingsUrl.format(year)
+
+def GetDraftUrl(year):
+	return DraftUrl.format(year)
 
 # Base class used to hold generic data
 # The csv writer works on arrays so this class
@@ -114,6 +119,9 @@ class Standing:
 
 class Results:
 	def __init__(self):
+
+		# Year the season took place
+		self.year = 0
 
 		# owner -> Standing
 		self.standings = {}
@@ -233,7 +241,7 @@ def ParseOwner(linkTag):
 
 def LoadDraft(results):
 
-	content = LoadContent(DraftUrl, "draft", "draft.html")
+	content = LoadContent(GetDraftUrl(results.year), "draft", "draft.html")
 
 	soup = BeautifulSoup(content, 'html.parser')
 
@@ -307,7 +315,7 @@ def CalculatePlayoffTeams(divisions, standings):
 #
 def LoadDivisions(results):
 
-	content = LoadContent(StandingsUrl, "divisions", "divisions.html")
+	content = LoadContent(GetStandingsUrl(results.year), "divisions", "divisions.html")
 	soup = BeautifulSoup(content, 'html.parser')
 
 	mainDiv = soup.find('div', class_='games-fullcol')
@@ -586,7 +594,7 @@ def LoadStatsForPage(htmlFile, results):
 	UpdateStandings(owners, results.standingsOptimal, totalWeekPoints[1])
 	UpdateIndividualOptimalStandings(owners, totalWeekPoints[0], totalWeekPoints[2], totalWeekPoints[3], results)
 
-def DownloadBoxscores():
+def DownloadBoxscores(year):
 	schedulesContent = LoadContent(ScheduleUrl, "schedules", "schedules.html")
 	soup = BeautifulSoup(schedulesContent, 'html.parser')
 
@@ -624,7 +632,7 @@ def DownloadBoxscores():
 		teamId = link[:link.index('&')]
 
 		# Get Url and name the file
-		url = GetBoxScoreQuickUrl(teamId, scoringPeriodId)
+		url = GetBoxScoreQuickUrl(teamId, scoringPeriodId, year)
 		filename = "week_" + str(scoringPeriodId) + ":_" + cells[1].text + "_vs_" + cells[4].text + ".html"
 
 		print("Downloading boxscore to file: " + filename)
@@ -643,11 +651,11 @@ def LoadStats(results, useTestDir):
 	else:
 		# if there are no files in boxscores directory
 		# download all boxscores from espn
-		if len(glob.glob(dirname +"/*.html")) == 0:
-			DownloadBoxscores()
+		if (len(glob.glob(dirname +"/*.html")) + len(glob.glob(dirname +"/*.htm"))) == 0:
+			DownloadBoxscores(results.year)
 
 	for item in os.listdir(dirname):
-		if not item.endswith(".html"):
+		if not item.endswith(".html") and not item.endswith(".htm"):
 			continue
 
 		print(item)
@@ -655,11 +663,12 @@ def LoadStats(results, useTestDir):
 
 def main(argv):
 	try:
-		opts, args = getopt.getopt(argv,"tr")
+		opts, args = getopt.getopt(argv,"try:f")
 	except getopt.GetoptError:
-		print("scrape.py -t [use test dir] -r [cleans all files]")
+		print("scrape.py -t [use test dir] -r [cleans all results] -f [cleans all files] -y [year]")
 		sys.exit(2)
 
+	year = 2016 # 2016 is the default. First year of stats.
 	useTestDir = False
 	for opt, arg in opts:
 		if opt == '-t':
@@ -669,8 +678,26 @@ def main(argv):
 			# This option removes all files from the results folder.
 			subprocess.Popen('rm results/*.*', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 			sys.exit(0)
+		elif opt == '-y':
+			try:
+				year = int(arg)
+			except ValueError:
+				print("Using year 2016 because you gave a faulty year")
+				pass
+		elif opt == '-f':
+			# This option will terminate program after cleaning
+			# This option removes all files from the results folder.
+			# This will also erase all downloaded files
+			subprocess.Popen('rm results/*.*', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+			subprocess.Popen('rm schedules/*.*', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+			subprocess.Popen('rm divisions/*.*', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+			subprocess.Popen('rm draft/*.*', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+			subprocess.Popen('rm boxscores/*.*', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+			sys.exit(0)
+
 
 	results = Results()
+	results.year = year
 
 	# Load all divisions and owners
 	LoadDivisions(results)
