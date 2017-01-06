@@ -14,6 +14,8 @@ DraftUrl = "http://games.espn.com/ffl/tools/draftrecap?leagueId=524258&year={}"
 StandingsUrl = "http://games.espn.go.com/ffl/standings?leagueId=524258&seasonId={}"
 ScheduleUrl = "http://games.espn.com/ffl/schedule?leagueId=524258"
 BoxScoreQuickUrl = "http://games.espn.com/ffl/boxscorequick?leagueId=524258&teamId={}&scoringPeriodId={}&seasonId={}&view=scoringperiod&version=quick"
+DefaultWaiverReportUrl = "http://games.espn.com/ffl/waiverreport?leagueId=524258"
+DateWaiverReportUrl = "http://games.espn.com/ffl/waiverreport?leagueId=524258&date={}"
 
 def GetBoxScoreQuickUrl(teamId, scoringPeriodId, year):
 	return BoxScoreQuickUrl.format(teamId, scoringPeriodId, year)
@@ -23,6 +25,10 @@ def GetStandingsUrl(year):
 
 def GetDraftUrl(year):
 	return DraftUrl.format(year)
+
+# date expected in format 'yyyymmdd'
+def GetWaiverReportForDate(date):
+	return DateWaiverReportUrl.format(date)
 
 # Base class used to hold generic data
 # The csv writer works on arrays so this class
@@ -91,6 +97,12 @@ class PlayerDraftInfo(RowData):
 		self.values = ["","","","", 0]
 		self.attrs = ["owner", "playerName", "playerTeam", "pos", "draftAmount"]
 
+# Individual waiver wire move
+class WaiverWireMove(RowData):
+	def __init__(self):
+		self.values = ["", "", "", "", 0, "", "", ""]
+		self.attrs = ["date", "owner", "playerName", "playerPos", "cost", "result", "droppedPlayerName", "droppedPlayerPos"]
+
 class Standing:
 	def __init__(self):
 		self.points = 0
@@ -156,6 +168,10 @@ class Results:
 		# Division -> list of owners
 		self.divisions = { "east" : [], "west" : [] }
 
+		# Every single waiver wire move
+		# list of WaiverWireMove
+		self.waiverWireMoves = []
+
 	def InitializeWithOwners(self):
 		for owner in self.divisions["east"] + self.divisions["west"]:
 			self.standings[owner] = Standing()
@@ -193,6 +209,7 @@ class Results:
 	 	self.outputRows("results/wrongDecisionsOptimal.csv", self.wrongDecisionsOptimal)
 	 	self.outputRows("results/playerData.csv", self.playerData)
 	 	self.outputRows("results/draft.csv", self.allDraftData)
+	 	self.outputRows("results/waiverMoves.csv", self.waiverWireMoves)
 	 	self.outputStandings("results/standings.csv", self.standings)
 	 	self.outputStandings("results/standingsOptimal.csv", self.standingsOptimal)
 
@@ -274,6 +291,77 @@ def LoadDraft(results):
 
 			results.playerDraftMap[str(playerName)] = [str(owner), str(amount)]
 			results.allDraftData.append(playerDraftInfo)
+
+'''
+Load up all waiver wire activity and store data in results
+'''
+def LoadWaiverWire(results):
+	content = LoadContent(DefaultWaiverReportUrl, "waivers", "defaultwaivers.html")
+	soup = BeautifulSoup(content, 'html.parser')
+	
+	combo = soup.find('select')
+	options = combo.find_all('option')
+
+	# grab date values for each option in the select dropdown
+	dates = [ str(x['value']) for x in options ]
+
+	for date in dates:
+		url = GetWaiverReportForDate(date)
+		filename = "waiver_"+date+".html"
+		content = LoadContent(url, "waivers", filename)
+
+		soup = BeautifulSoup(content, 'html.parser')
+
+		# Grab all rows in the main table
+		# There not be any moves on a date
+		table = soup.find('table', class_='tableBody')
+		if table is None:
+			continue
+
+		tableRows = table.find_all('tr')
+
+		for row in tableRows:
+			cells = row.find_all('td')
+			if len(cells) < 5:
+				continue
+
+			move = WaiverWireMove()
+			move.date = date
+
+			owner = ParseOwner(cells[1].a)
+			move.owner = owner
+
+			text = cells[2].text
+			idx = text.find(',')
+			if idx == -1:
+				# Defense has no comma
+				move.playerName = cells[2].a.text
+				move.playerPos = "Defense"
+			else:
+				move.playerName = text[0:idx]
+				move.playerPos = text[idx:].split(' ')[2]
+
+			# Gets rid of the dollar sign
+			move.cost = int(cells[3].text[1:])
+
+			# Move acceppted uses the strong tag
+			if cells[4].strong is not None:
+				# remove the period from text
+				move.result = cells[4].strong.text[:-1] 
+			else:
+				move.result = "Unsuccessful"
+
+			if cells[4].b is not None:
+				# Dropped player name is bold, so grab its text
+				move.droppedPlayerName = cells[4].b.text
+
+				# Parse out dropped player position
+				idx2 = cells[4].text.find(',')
+				pos = cells[4].text[idx2:].split(' ')[2]
+				move.droppedPlayerPos = pos
+
+			results.waiverWireMoves.append(move)
+
 
 def CalculatePlayoffTeams(divisions, standings):
 
@@ -685,6 +773,9 @@ def LoadStats(results, useTestDir):
 		print(item)
 		LoadStatsForPage(dirname+'/'+item, results)
 
+def RunCommand(command):
+	subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
 def main(argv):
 	try:
 		opts, args = getopt.getopt(argv,"try:f")
@@ -700,8 +791,8 @@ def main(argv):
 		elif opt == '-r':
 			# This option will terminate program after cleaning
 			# This option removes all files from the results folder.
-			subprocess.Popen('rm results/*.*', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-			sys.exit(0)
+			RunCommand('rm results/*.*')
+			sys.exit(2)
 		elif opt == '-y':
 			try:
 				year = int(arg)
@@ -712,12 +803,13 @@ def main(argv):
 			# This option will terminate program after cleaning
 			# This option removes all files from the results folder.
 			# This will also erase all downloaded files
-			subprocess.Popen('rm results/*.*', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-			subprocess.Popen('rm schedules/*.*', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-			subprocess.Popen('rm divisions/*.*', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-			subprocess.Popen('rm draft/*.*', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-			subprocess.Popen('rm boxscores/*.*', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-			sys.exit(0)
+			RunCommand('rm results/*.*')
+			RunCommand('rm schedules/*.*')
+			RunCommand('rm divisions/*.*')
+			RunCommand('rm draft/*.*')
+			RunCommand('rm boxscores/*.*')
+			RunCommand('rm waivers/*.*')
+			sys.exit(2)
 
 
 	results = Results()
@@ -728,6 +820,9 @@ def main(argv):
 
 	# Load all draft information
 	LoadDraft(results)
+
+	# Load all waiver wire and auction information
+	LoadWaiverWire(results)
 
 	# Get all boxscore data and store in results
 	LoadStats(results, useTestDir)
