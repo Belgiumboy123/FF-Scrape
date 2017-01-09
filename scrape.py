@@ -16,6 +16,7 @@ ScheduleUrl = "http://games.espn.com/ffl/schedule?leagueId=524258"
 BoxScoreQuickUrl = "http://games.espn.com/ffl/boxscorequick?leagueId=524258&teamId={}&scoringPeriodId={}&seasonId={}&view=scoringperiod&version=quick"
 DefaultWaiverReportUrl = "http://games.espn.com/ffl/waiverreport?leagueId=524258"
 DateWaiverReportUrl = "http://games.espn.com/ffl/waiverreport?leagueId=524258&date={}"
+ProjectionsUrl = "http://games.espn.com/ffl/tools/projections?&scoringPeriodId={}&seasonId={}&leagueId=524258&startIndex={}"
 
 def GetBoxScoreQuickUrl(teamId, scoringPeriodId, year):
 	return BoxScoreQuickUrl.format(teamId, scoringPeriodId, year)
@@ -27,8 +28,29 @@ def GetDraftUrl(year):
 	return DraftUrl.format(year)
 
 # date expected in format 'yyyymmdd'
-def GetWaiverReportForDate(date):
+def GetWaiverReportForDateUrl(date):
 	return DateWaiverReportUrl.format(date)
+
+# scoringPeriodId is 1-based
+# page is 0-based
+# Espn grabs players by the 40
+# so page*40 gives us the correct startindex
+def GetProjectionsUrl(scoringPeriodId, year, page):
+	return ProjectionsUrl.format(scoringPeriodId, year, str(page*40))
+
+def LoadContent(url, directory, proposedFileName):
+
+	filepath = directory+ "/" + proposedFileName
+	content = None
+
+	if not os.path.exists(filepath):
+		content = requests.get(url).content
+		with open(filepath, 'wb') as f:
+			f.write(content)
+	else:
+		content = open(filepath, "r").read()
+
+	return content
 
 # Base class used to hold generic data
 # The csv writer works on arrays so this class
@@ -88,8 +110,8 @@ class WrongDecision(RowData):
 # One week's performance for a single player
 class PlayerBoxScore(RowData):
 	def __init__(self):
-		self.values = [0, "", "", "", "", "", "", "", "", 0.0, "", "", False]
-		self.attrs = ["week", "owner", "team", "opponent", "slot", "playerName", "playerTeam", "pos", "playerOpp", "points", "draftOwner", "draftAmount", "isBench"]
+		self.values = [0, "", "", "", "", "", "", "", "", 0.0, "", "", False, 0.0]
+		self.attrs = ["week", "owner", "team", "opponent", "slot", "playerName", "playerTeam", "pos", "playerOpp", "points", "draftOwner", "draftAmount", "isBench", "projection"]
 
 # Individual auction draft result
 class PlayerDraftInfo(RowData):
@@ -100,8 +122,21 @@ class PlayerDraftInfo(RowData):
 # Individual waiver wire move
 class WaiverWireMove(RowData):
 	def __init__(self):
-		self.values = ["", "", "", "", 0, "", "", ""]
-		self.attrs = ["date", "owner", "playerName", "playerPos", "cost", "result", "droppedPlayerName", "droppedPlayerPos"]
+		self.values = ["", 0, "", "", "", 0, "", "", ""]
+		self.attrs = ["date", "week", "owner", "playerName", "playerPos", "cost", "result", "droppedPlayerName", "droppedPlayerPos"]
+
+# Projection upset start
+class ProjectionUpsetDecision(RowData):
+	def __init__(self, starter, benchPlayer):
+		self.values = ["", 0, "", "", 0.0, 0.0]
+		self.attrs = ["owner", "week", "starter", "benchPlayer", "projectionDiff", "pointDiff"]
+
+		self.owner = starter.owner
+		self.week = starter.week
+		self.starter = starter.playerName
+		self.benchPlayer = benchPlayer.playerName
+		self.projectionDiff = round(Decimal(benchPlayer.projection - starter.projection),2)
+		self.pointDiff = round(Decimal(starter.points - benchPlayer.points),2)
 
 class Standing:
 	def __init__(self):
@@ -172,6 +207,15 @@ class Results:
 		# list of WaiverWireMove
 		self.waiverWireMoves = []
 
+		# Weekly espn projections for each player
+		# PlayerName -> []
+		self.projections = {}
+
+		# list of decisions where starter was projected for less points
+		# than a potential bench replacement
+		# List of ProjectionUpsetDecision
+		self.projectionUpsetDecisions = []
+
 	def InitializeWithOwners(self):
 		for owner in self.divisions["east"] + self.divisions["west"]:
 			self.standings[owner] = Standing()
@@ -210,6 +254,7 @@ class Results:
 	 	self.outputRows("results/playerData.csv", self.playerData)
 	 	self.outputRows("results/draft.csv", self.allDraftData)
 	 	self.outputRows("results/waiverMoves.csv", self.waiverWireMoves)
+	 	self.outputRows("results/projectionUpsetDecisions.csv", self.projectionUpsetDecisions)
 	 	self.outputStandings("results/standings.csv", self.standings)
 	 	self.outputStandings("results/standingsOptimal.csv", self.standingsOptimal)
 
@@ -232,21 +277,6 @@ PosInSlotMap = 	{
 def DoesPosFitInSlot(pos, slot):
 	return pos in PosInSlotMap[slot]
 
-
-def LoadContent(url, directory, proposedFileName):
-
-	filepath = directory+ "/" + proposedFileName
-	content = None
-
-	if not os.path.exists(filepath):
-		content = requests.get(url).content
-		with open(filepath, 'wb') as f:
-			f.write(content)
-	else:
-		content = open(filepath, "r").read()
-
-	return content
-
 # Given a link element parse out owner name from title.
 # Format is 'team name (owner name)'
 def ParseOwner(linkTag):
@@ -255,6 +285,37 @@ def ParseOwner(linkTag):
 	idxEnd = title.index(')')
 	owner = title[idxStart+1:idxEnd]
 	return owner
+
+def LoadProjections(results):
+	
+	for scoringPeriodId in range(1,14):
+		week = scoringPeriodId - 1
+		for page in range(0,7):
+			url = GetProjectionsUrl(scoringPeriodId, results.year, page)
+			filename = str(scoringPeriodId) + "_" + str(page) + ".html"
+
+			content = LoadContent(url, "projections", filename)
+			soup = BeautifulSoup(content, 'html.parser')
+
+			table = soup.find('table', class_='tableBody')
+			tableRows = table.find_all('tr', class_='pncPlayerRow')
+
+			for row in tableRows:
+				cells = row.find_all('td')
+				if len(cells) < 16:
+					continue
+
+				playerName = str(cells[0].a.text)
+				points = float(cells[15].text)
+
+				weeklyProjections = None
+				try:
+					weeklyProjections = results.projections[playerName]
+				except KeyError:
+					results.projections[playerName] = [99999]*13
+					weeklyProjections = results.projections[playerName]
+
+				weeklyProjections[week] = points
 
 def LoadDraft(results):
 
@@ -294,7 +355,14 @@ def LoadDraft(results):
 
 '''
 Load up all waiver wire activity and store data in results
+
+Easiest/simpliest way to convert dates to NFL weeks is
+to use the hardcoded map. Year -> MondayFootballDates.
+MondayFootballDates will be list of dates in format YYYYMMDD.
 '''
+
+MondayDates = {'2016' : []}
+
 def LoadWaiverWire(results):
 	content = LoadContent(DefaultWaiverReportUrl, "waivers", "defaultwaivers.html")
 	soup = BeautifulSoup(content, 'html.parser')
@@ -305,8 +373,10 @@ def LoadWaiverWire(results):
 	# grab date values for each option in the select dropdown
 	dates = [ str(x['value']) for x in options ]
 
+	# TODO rule out post week 13 dates
+
 	for date in dates:
-		url = GetWaiverReportForDate(date)
+		url = GetWaiverReportForDateUrl(date)
 		filename = "waiver_"+date+".html"
 		content = LoadContent(url, "waivers", filename)
 
@@ -430,7 +500,7 @@ def LoadDivisions(results):
 # Gather all possible wrong decisions
 # This is list of any bench player that out scored any starter
 #
-def GenerateAllWrongDecisions(startingScoreRowData, benchScoreRowData, allWrongDecisions):
+def GenerateAllWrongDecisions(startingScoreRowData, benchScoreRowData, allWrongDecisions, projectionUpsetDecisions):
 	
 	# Account of shuffling rb/wr to flex slots
 	# if there is a wr in flex or exflex
@@ -456,6 +526,9 @@ def GenerateAllWrongDecisions(startingScoreRowData, benchScoreRowData, allWrongD
 
 			if benchPlayer.points > starter.points:
 				allWrongDecisions.append(WrongDecision(starter, benchPlayer))
+
+			if benchPlayer.projection > starter.projection:
+				projectionUpsetDecisions.append(ProjectionUpsetDecision(starter, benchPlayer))
 
 #
 # Calculate the optimal lineup
@@ -528,9 +601,10 @@ def RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, optimalWrongDec
 #
 # Return list of PlayerBoxScore row data from the given playerTable
 #
-def LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap):
+def LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap, projections):
 
 	scoreRowData = []
+	iWeek = int(week) # needed as index into projections list
 
 	playerRows = playerTable.find_all('tr', class_='pncPlayerRow')
 		
@@ -597,6 +671,11 @@ def LoadStatsForTeam(playerTable, index, week, owners, teamNames, playerDraftMap
 		playerData.draftOwner = draftInfo[0]
 		playerData.draftAmount = draftInfo[1]
 		playerData.isBench = isBench
+
+		try:
+			playerData.projection = projections[playerName][iWeek-1]
+		except KeyError:
+			print(week + " " + playerName)
 
 		scoreRowData.append(playerData)
 
@@ -672,8 +751,8 @@ def LoadStatsForPage(htmlFile, results):
 
 	for index,playerTable in enumerate(players):
 
-		startingScoreRowData = LoadStatsForTeam(playerTable, index, week, owners, teamNames, results.playerDraftMap)
-		benchScoreRowData = LoadStatsForTeam(benches[index], index, week, owners, teamNames, results.playerDraftMap)
+		startingScoreRowData = LoadStatsForTeam(playerTable, index, week, owners, teamNames, results.playerDraftMap, results.projections)
+		benchScoreRowData = LoadStatsForTeam(benches[index], index, week, owners, teamNames, results.playerDraftMap, results.projections)
 
 		# Add all starting and bench players to player data
 		for row in startingScoreRowData:
@@ -683,7 +762,7 @@ def LoadStatsForPage(htmlFile, results):
 			results.playerData.append(row)
 
 		# Get all wrong decisions
-		GenerateAllWrongDecisions(startingScoreRowData, benchScoreRowData, results.wrongDecisionsAll)
+		GenerateAllWrongDecisions(startingScoreRowData, benchScoreRowData, results.wrongDecisionsAll, results.projectionUpsetDecisions)
 
 		# Get the optimal staring lineup
 		optimalScoringPlayers = RunOptimalLinupAlgo(startingScoreRowData, benchScoreRowData, results.wrongDecisionsOptimal) 
@@ -820,6 +899,9 @@ def main(argv):
 
 	# Load all draft information
 	LoadDraft(results)
+
+	# Load all weekly projections for each player
+	LoadProjections(results)
 
 	# Load all waiver wire and auction information
 	LoadWaiverWire(results)
