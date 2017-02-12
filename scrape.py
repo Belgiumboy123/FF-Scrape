@@ -16,7 +16,7 @@ ScheduleUrl = "http://games.espn.com/ffl/schedule?leagueId=524258"
 BoxScoreQuickUrl = "http://games.espn.com/ffl/boxscorequick?leagueId=524258&teamId={}&scoringPeriodId={}&seasonId={}&view=scoringperiod&version=quick"
 DefaultWaiverReportUrl = "http://games.espn.com/ffl/waiverreport?leagueId=524258"
 DateWaiverReportUrl = "http://games.espn.com/ffl/waiverreport?leagueId=524258&date={}"
-ProjectionsUrl = "http://games.espn.com/ffl/tools/projections?&scoringPeriodId={}&seasonId={}&leagueId=524258&startIndex={}"
+ProjectionsUrl = "http://games.espn.com/ffl/tools/projections?&scoringPeriodId={}&seasonId={}&leagueId=524258&startIndex={}&slotCategoryId={}"
 
 def GetBoxScoreQuickUrl(teamId, scoringPeriodId, year):
 	return BoxScoreQuickUrl.format(teamId, scoringPeriodId, year)
@@ -32,11 +32,12 @@ def GetWaiverReportForDateUrl(date):
 	return DateWaiverReportUrl.format(date)
 
 # scoringPeriodId is 1-based
+# slotCategory. QB is 0. RB/WR is 3. TE is 6. Def is 16. 
 # page is 0-based
 # Espn grabs players by the 40
 # so page*40 gives us the correct startindex
-def GetProjectionsUrl(scoringPeriodId, year, page):
-	return ProjectionsUrl.format(scoringPeriodId, year, str(page*40))
+def GetProjectionsUrl(scoringPeriodId, year, page, slotCategoryId):
+	return ProjectionsUrl.format(scoringPeriodId, year, str(page*40), slotCategoryId)
 
 def LoadContent(url, directory, proposedFileName):
 
@@ -286,37 +287,56 @@ def ParseOwner(linkTag):
 	owner = title[idxStart+1:idxEnd]
 	return owner
 
-def LoadProjections(results):
+def LoadProjectionFile(scoringPeriodId, slotId, page, results):
 	
+	url = GetProjectionsUrl(scoringPeriodId, results.year, page, slotId)
+	filename = str(scoringPeriodId) + "_" + str(slotId) + "_" + str(page) + ".html"
+
+	content = LoadContent(url, "projections", filename)
+	soup = BeautifulSoup(content, 'html.parser')
+
+	table = soup.find('table', class_='tableBody')
+	tableRows = table.find_all('tr', class_='pncPlayerRow')
+
+	for row in tableRows:
+		cells = row.find_all('td')
+		if len(cells) is not 16 and len(cells) is not 13:
+			continue
+
+		playerName = str(cells[0].a.text)
+		points = float(cells[len(cells)-1].text)
+
+		weeklyProjections = None
+		try:
+			weeklyProjections = results.projections[playerName]
+		except KeyError:
+			results.projections[playerName] = [0]*13
+			weeklyProjections = results.projections[playerName]
+
+		# Week is 0-based vs the 1-based scoringPeriodId
+		weeklyProjections[scoringPeriodId-1] = points
+
+'''
+'''
+def LoadProjections(results):
+
+	QBSlot = 0
+	RbWrSlot = 3
+	TESlot = 6
+	DefSlot = 16
+
 	for scoringPeriodId in range(1,14):
-		week = scoringPeriodId - 1
-		for page in range(0,7):
-			url = GetProjectionsUrl(scoringPeriodId, results.year, page)
-			filename = str(scoringPeriodId) + "_" + str(page) + ".html"
+		LoadProjectionFile(scoringPeriodId, QBSlot, 0, results)
+		LoadProjectionFile(scoringPeriodId, DefSlot, 0, results)
+		LoadProjectionFile(scoringPeriodId, TESlot, 0, results)
+		LoadProjectionFile(scoringPeriodId, RbWrSlot, 0, results)
+		LoadProjectionFile(scoringPeriodId, RbWrSlot, 1, results)
+		LoadProjectionFile(scoringPeriodId, RbWrSlot, 2, results)
+		LoadProjectionFile(scoringPeriodId, RbWrSlot, 3, results)
+		LoadProjectionFile(scoringPeriodId, RbWrSlot, 4, results)
 
-			content = LoadContent(url, "projections", filename)
-			soup = BeautifulSoup(content, 'html.parser')
-
-			table = soup.find('table', class_='tableBody')
-			tableRows = table.find_all('tr', class_='pncPlayerRow')
-
-			for row in tableRows:
-				cells = row.find_all('td')
-				if len(cells) < 16:
-					continue
-
-				playerName = str(cells[0].a.text)
-				points = float(cells[15].text)
-
-				weeklyProjections = None
-				try:
-					weeklyProjections = results.projections[playerName]
-				except KeyError:
-					results.projections[playerName] = [99999]*13
-					weeklyProjections = results.projections[playerName]
-
-				weeklyProjections[week] = points
-
+'''
+'''
 def LoadDraft(results):
 
 	content = LoadContent(GetDraftUrl(results.year), "draft", "draft.html")
