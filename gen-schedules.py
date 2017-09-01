@@ -1,5 +1,5 @@
 from enum import Enum
-from random import randint
+from random import sample
 
 Weeks = 13
 
@@ -14,7 +14,7 @@ class M(Enum):
 	mel = 7
 	bot = 8
 	drew = 9
-
+	
 class D(Enum):
 	east = 0
 	west = 1
@@ -44,42 +44,76 @@ def IsValidNewMatchup(team1, team2, week):
 	else:
 		return GetNumberOfExistingMatchups(team1, team2) < 1
 		
-def GetRandomOpponent(team1):
-	opp = team1
-	while opp == team1:
-		opp = M(randint(0, 9))
-	return opp
-		
+	
 def main():
+		
+	week = 0
+	while week < Weeks:
+		print("Generating opponents " + str(week))
+		
+		success = True
+		
+		try:
+			for m in M:
+				if HasOpponent(m, week):
+					continue
+		
+				foundOpp = False
+				newOpponnents = set(M)
+				newOpponnents.discard(m)				
+				while not foundOpp:
+
+					newOpp = sample(newOpponnents, 1)[0]
+					newOpponnents.discard(newOpp)
+					if IsValidNewMatchup(m, newOpp, week):
+						schedules[m][week] = newOpp
+						schedules[newOpp][week] = m
+						foundOpp = True
+		except:
+			success = False
+		
+		
+		if not success:
+			for m in M:
+				schedules[m][week] = ''
+				schedules[m][week-1] = ''
+				schedules[m][week-2] = ''
+			week = week - 2
+			print("trying again")
+		else:
+			week = week + 1
 	
-	for week in range(0,1):
-		for m in M:
-			if HasOpponent(m, week):
-				continue
-	
-			foundOpp = False
-			while not foundOpp:
-				newOpp = GetRandomOpponent(m)
-				if IsValidNewMatchup(m, newOpp, week):
-					schedules[m][week] = newOpp
-					schedules[newOpp][week] = m
-					foundOpp = True
-	
-	# Double check that each team plays it's own division members twice, and the other once
+	print("\nDouble checking opponents are correct\n")
+	noFailures = True
+	# Double check that each team plays it's own division members twice,
+	# and the other division just once
 	for m1 in M:
 		for m2 in M:
-			pass
+			if m1 == m2:
+				if schedules[m1].count(m2) != 0:
+					noFailures = False
+			elif InSameDivision(m1, m2):
+				if schedules[m1].count(m2) != 2:
+					noFailures = False
+			else:
+				if schedules[m1].count(m2) != 1:
+					noFailures = False
 	
-	for week in range(0, 1):
-		print("Week 1")
-		printedMembers = []
-		for m in M:
-			if m not in printedMembers:
-				opp = schedules[m][week]
-				print("\t" + m.name + "\t  vs\t" +  opp.name) 
-				printedMembers.append(m)
-				printedMembers.append(opp)
-		print("\n\n")
-		
+	if noFailures:
+		f = open("schedules.txt", "w")
+		for week in range(0, Weeks):
+			f.write("Week " + str(week+1) + "\n")
+			printedMembers = []
+			for m in M:
+				if m not in printedMembers:
+					opp = schedules[m][week]
+					f.write("\t" + m.name + "\t  vs\t" +  opp.name + "\n")
+					printedMembers.append(m)
+					printedMembers.append(opp)
+			f.write("\n\n")
+		print("Success schedule written to file")
+	else:
+		print("Failures have been found")
+		print(schedules)
 	
 main()
