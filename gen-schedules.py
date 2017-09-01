@@ -40,7 +40,12 @@ def IsValidNewMatchup(team1, team2, week):
 		return False
 
 	if InSameDivision(team1, team2):
-		return GetNumberOfExistingMatchups(team1, team2) < 2
+		isValid = GetNumberOfExistingMatchups(team1, team2) < 2
+		if isValid:
+			if (week > 0 and schedules[team1][week-1] == team2) or (week > 1 and schedules[team1][week-2] == team2):
+				isValid = False
+			
+		return isValid
 	else:
 		return GetNumberOfExistingMatchups(team1, team2) < 1
 		
